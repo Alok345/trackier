@@ -92,7 +92,7 @@ export function AppSidebar(props) {
         items: [
           { title: "Create Campaign", url: "/create-campaign" },
           { title: "Access Campaign", url: "#" },
-          { title: "Manage Campaign", url: "#" },
+          { title: "Manage Campaign", url: "/manage-campaign" },
         ],
       },
       {
