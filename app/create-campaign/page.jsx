@@ -16,7 +16,8 @@ import { ChevronDown, ChevronUp } from "lucide-react"
 import { firestore } from "@/lib/firestore"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/app-sidebar"
-import { addDoc, collection, serverTimestamp } from "firebase/firestore"
+import { addDoc, collection, doc, serverTimestamp, setDoc } from "firebase/firestore"
+import AdvertiserDropdown from "./advertiser-dropdown"
 
 const fetcher = (url) => fetch(url).then((r) => r.json())
 
@@ -127,67 +128,94 @@ export default function CreateCampaign() {
     }))
   }
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    
-    if (isSubmitting || hasSubmitted.current) return
-    
-    setIsSubmitting(true)
-    hasSubmitted.current = true
+  // Function to generate unique campaign ID
+const generateCampaignId = (title) => {
+  // Clean the title: remove special characters, replace spaces with hyphens, convert to lowercase
+  const cleanTitle = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-zA-Z0-9\s]/g, '')
+    .replace(/\s+/g, '-')
+    .substring(0, 30); // Limit length
+  
+  // Add timestamp for uniqueness
+  const timestamp = Date.now().toString().slice(-6);
+  
+  // Add random string for additional uniqueness
+  const randomStr = Math.random().toString(36).substring(2, 6);
+  
+  return `${cleanTitle}-${timestamp}${randomStr}`;
+}
 
-    try {
-      // Basic validation
-      if (!formData.title || !formData.advertiser || !formData.defaultCampaignUrl) {
-        toast.error("Please fill in all required fields")
-        hasSubmitted.current = false
-        setIsSubmitting(false)
-        return
-      }
+const handleSubmit = async (e) => {
+  e.preventDefault()
+  
+  if (isSubmitting || hasSubmitted.current) return
+  
+  setIsSubmitting(true)
+  hasSubmitted.current = true
 
-      // Prepare data for Firestore with proper type conversion
-      const campaignData = {
-        ...formData,
-        // Ensure arrays are properly formatted
-        trafficChannels: Array.isArray(formData.trafficChannels) ? formData.trafficChannels : [],
-        devices: Array.isArray(formData.devices) ? formData.devices : ["all"],
-        activeDays: Array.isArray(formData.activeDays) ? formData.activeDays : [],
-        
-        // Convert numeric fields
-        revenue: formData.revenue ? parseFloat(formData.revenue) : 0,
-        payout: formData.payout ? parseFloat(formData.payout) : 0,
-        startHour: Number.parseInt(formData.startHour) || 0,
-        endHour: Number.parseInt(formData.endHour) || 0,
-        
-        // Convert boolean fields
-        requireTerms: Boolean(formData.requireTerms),
-        hasTimeTargeting: Boolean(formData.hasTimeTargeting),
-        enableInactiveHours: Boolean(formData.enableInactiveHours),
-        
-        // Ensure string fields
-        scheduleStatus: String(formData.scheduleStatus),
-        publisherEmailNotify: String(formData.publisherEmailNotify),
-        
-        // Add timestamps
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      }
-
-      console.log("Submitting campaign data:", campaignData)
-
-      // Add to Firestore
-      const docRef = await addDoc(collection(firestore, 'campaigns'), campaignData)
-      
-      console.log("Campaign created with ID: ", docRef.id)
-      toast.success("Campaign created successfully!")
-      
-    } catch (error) {
-      console.error("Error adding campaign to Firestore: ", error)
-      toast.error("Error creating campaign: " + (error.message || "Unknown error"))
+  try {
+    // Basic validation
+    if (!formData.title || !formData.advertiser || !formData.defaultCampaignUrl) {
+      toast.error("Please fill in all required fields")
       hasSubmitted.current = false
-    } finally {
       setIsSubmitting(false)
+      return
     }
+
+    // Generate unique campaign ID
+    const campaignId = generateCampaignId(formData.title)
+    
+    // Prepare data for Firestore with proper type conversion
+    const campaignData = {
+      ...formData,
+      // Add the unique campaign ID
+      campaignId: campaignId,
+      // Ensure arrays are properly formatted
+      trafficChannels: Array.isArray(formData.trafficChannels) ? formData.trafficChannels : [],
+      devices: Array.isArray(formData.devices) ? formData.devices : ["all"],
+      activeDays: Array.isArray(formData.activeDays) ? formData.activeDays : [],
+      
+      // Convert numeric fields
+      revenue: formData.revenue ? parseFloat(formData.revenue) : 0,
+      payout: formData.payout ? parseFloat(formData.payout) : 0,
+      startHour: Number.parseInt(formData.startHour) || 0,
+      endHour: Number.parseInt(formData.endHour) || 0,
+      
+      // Convert boolean fields
+      requireTerms: Boolean(formData.requireTerms),
+      hasTimeTargeting: Boolean(formData.hasTimeTargeting),
+      enableInactiveHours: Boolean(formData.enableInactiveHours),
+      
+      // Ensure string fields
+      scheduleStatus: String(formData.scheduleStatus),
+      publisherEmailNotify: String(formData.publisherEmailNotify),
+      
+      // Add timestamps
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }
+
+    console.log("Submitting campaign data:", campaignData)
+
+    // Create document with custom ID (campaignId as document ID)
+    const campaignsCollection = collection(firestore, 'campaigns')
+    const campaignDocRef = doc(campaignsCollection, campaignId)
+    
+    await setDoc(campaignDocRef, campaignData)
+    
+    console.log("Campaign created with ID: ", campaignId)
+    toast.success(`Campaign created successfully! ID: ${campaignId}`)
+    
+  } catch (error) {
+    console.error("Error adding campaign to Firestore: ", error)
+    toast.error("Error creating campaign: " + (error.message || "Unknown error"))
+    hasSubmitted.current = false
+  } finally {
+    setIsSubmitting(false)
   }
+}
 
   const currencyOptions = [
     { value: "USD", label: "$ USD" },
@@ -251,6 +279,7 @@ export default function CreateCampaign() {
         <header className="flex h-16 items-center px-4 bg-gray-50 shadow-sm">
           <SidebarTrigger className="-ml-1" />
           <h1 className="ml-4 text-lg font-semibold">Create Campaign</h1>
+          
         </header>
 
         <div className="container mx-auto py-8 px-4 max-w-4xl">
@@ -282,13 +311,14 @@ export default function CreateCampaign() {
                 {/* Advertiser */}
                 <div className="space-y-2">
                   <Label htmlFor="advertiser">Advertiser</Label>
-                  <DropdownWithAdd
+                  {/* <DropdownWithAdd
                     collectionName="advertisers"
                     placeholder="Select advertiser"
                     value={formData.advertiser}
                     onValueChange={(value) => handleInputChange("advertiser", value)}
                     className="w-full"
-                  />
+                  /> */}
+                  <AdvertiserDropdown value={formData.advertiser} onValueChange={(value) => handleInputChange("advertiser", value)} />
                 </div>
 
                 {/* Title */}

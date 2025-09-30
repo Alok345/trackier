@@ -35,42 +35,50 @@ export default function Page() {
     e.preventDefault();
     setLoading(true);
 
-    try {
-      const defaultPassword = "Admin@123";
+   // inside handleSubmit
+try {
+  const defaultPassword = "Admin@123";
 
-      // 1️⃣ Create Firebase Auth user
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        email,
-        defaultPassword
-      );
-      const uid = userCredential.user.uid;
+  // 1️⃣ Create Firebase Auth user
+  const userCredential = await createUserWithEmailAndPassword(
+    auth,
+    email,
+    defaultPassword
+  );
+  const uid = userCredential.user.uid;
 
-      // 2️⃣ Create Firestore document
-      await setDoc(doc(firestore, "users", uid), {
-        uId: uid,
-        email,
-        name,
-        phone,
-        userType,
-        status,
-        createdAt: new Date(),
-      });
+  // 2️⃣ Generate profileId (first 7 chars of name + random 3-digit number)
+  const cleanName = name.replace(/\s+/g, ""); // remove spaces
+  const profileId =
+    cleanName.substring(0, 7).toLowerCase() + Math.floor(100 + Math.random() * 900);
 
-      toast.success("Member created successfully!");
+  // 3️⃣ Create Firestore document
+  await setDoc(doc(firestore, "users", uid), {
+    uId: uid,
+    email,
+    name,
+    phone,
+    userType,
+    status,
+    profileId, // ✅ new field
+    createdAt: new Date(),
+  });
 
-      // Reset form
-      setEmail("");
-      setName("");
-      setPhone("");
-      setUserType("admin");
-      setStatus("InActive");
-    } catch (err) {
-      console.error(err);
-      toast.error("Error creating member: " + err.message);
-    } finally {
-      setLoading(false);
-    }
+  toast.success("Member created successfully!");
+
+  // Reset form
+  setEmail("");
+  setName("");
+  setPhone("");
+  setUserType("admin");
+  setStatus("InActive");
+} catch (err) {
+  console.error(err);
+  toast.error("Error creating member: " + err.message);
+} finally {
+  setLoading(false);
+}
+
   };
 
   return (

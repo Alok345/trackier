@@ -91,6 +91,8 @@ export function AppSidebar(props) {
         isActive: true,
         items: [
           { title: "Create Campaign", url: "/create-campaign" },
+          { title: "Create Publisher", url: "/create-publisher" },
+          { title: "Create Campaign Link", url: "/campaign-link" },
           { title: "Access Campaign", url: "#" },
           { title: "Manage Campaign", url: "/manage-campaign" },
         ],
