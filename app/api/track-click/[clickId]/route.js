@@ -50,7 +50,7 @@ export async function GET(request, { params }) {
     
     if (!previewUrl) {
       console.log('No preview URL found for clickId:', clickId)
-      return NextResponse.redirect('https://example.com') // Fallback URL
+      return NextResponse.redirect('https://example.com') 
     }
 
     // Construct the final redirect URL with all parameters

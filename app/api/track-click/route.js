@@ -80,7 +80,6 @@ export async function GET(request) {
     return NextResponse.redirect('https://example.com')
   }
 }
-
 // Helper function to reconstruct original URL without tracking parameters
 function constructOriginalUrl(searchParams) {
   const url = new URL('https://ad2click.com/')
