@@ -1,9 +1,8 @@
 "use client";
 
-// import { useState } from "react";
 import { useEffect, useState } from "react";
 import { collection, getDoc, doc } from "firebase/firestore";
-import { firestore } from "@/lib/firestore"; // adjust import if needed
+import { firestore } from "@/lib/firestore";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -38,22 +37,16 @@ import {
 export default function CampaignsTable({
   campaigns,
   formData,
+  selectedPublisherIds, // Receive from parent
+  onPublisherChange, // Receive from parent
   onGenerateLink,
 }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 
-  // 🔹 store selected Publisher IDs
-  const [selectedPublisherIds, setSelectedPublisherIds] = useState({});
+  // Remove local state for selectedPublisherIds since it's now from parent
+  // const [selectedPublisherIds, setSelectedPublisherIds] = useState({});
 
-  // Filter campaigns
-  const filteredCampaigns = campaigns.filter((campaign) => {
-    return (
-      campaign.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      campaign.campaignId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      campaign.advertiser?.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-  });
   // 🔹 Store publisher ranges from Firestore
   const [publisherRanges, setPublisherRanges] = useState([]);
 
@@ -76,6 +69,15 @@ export default function CampaignsTable({
 
     fetchPublisherRanges();
   }, []);
+
+  // Filter campaigns
+  const filteredCampaigns = campaigns.filter((campaign) => {
+    return (
+      campaign.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      campaign.campaignId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      campaign.advertiser?.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  });
 
   // Status badge color
   const getStatusColor = (status) => {
@@ -100,12 +102,9 @@ export default function CampaignsTable({
     return range;
   };
 
-  // Handle dropdown change
+  // Handle dropdown change - call parent handler
   const handlePublisherChange = (campaignId, value) => {
-    setSelectedPublisherIds((prev) => ({
-      ...prev,
-      [campaignId]: value,
-    }));
+    onPublisherChange(campaignId, value);
   };
 
   return (
@@ -201,9 +200,6 @@ export default function CampaignsTable({
                     <TableCell>
                       <div>
                         <div className="font-medium">{campaign.title}</div>
-                        {/* <div className="text-sm text-muted-foreground font-mono">
-                          ID: {campaign.campaignId}
-                        </div> */}
                       </div>
                     </TableCell>
 
@@ -240,9 +236,6 @@ export default function CampaignsTable({
                     <TableCell>
                       <div className="text-sm">
                         <div>{campaign.advertiser}</div>
-                        {/* <div className="text-muted-foreground font-mono">
-                          {campaign.advertiserId}
-                        </div> */}
                       </div>
                     </TableCell>
 
@@ -258,8 +251,7 @@ export default function CampaignsTable({
                         onClick={() =>
                           onGenerateLink({
                             ...campaign,
-                            publisherId:
-                              selectedPublisherIds[campaign.id] || null,
+                            publisherId: selectedPublisherIds[campaign.id] || null,
                           })
                         }
                         disabled={!formData.domainUrl}
@@ -270,9 +262,7 @@ export default function CampaignsTable({
                       </Button>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                       
-                      >
+                      <Button>
                         <Link className="h-4 w-4 mr-2" />
                         Create Google Link
                       </Button>

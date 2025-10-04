@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { getAuth, onAuthStateChanged } from "firebase/auth"
 import { generateClickId } from "@/lib/affiliateUtils"
 import AddDomain from "./AddDomain"
-import AddSource from "./AddSource" // Import AddSource
+import AddSource from "./AddSource"
 import LinkConfiguration from "./LinkConfiguration"
 import CampaignsTable from "./CampaignsTable"
 import { toast } from "react-hot-toast"
@@ -21,7 +21,7 @@ export default function CreateCampaignLink() {
   const [campaigns, setCampaigns] = useState([])
   const [advertisers, setAdvertisers] = useState([])
   const [domains, setDomains] = useState([])
-  const [sources, setSources] = useState([]) // Add sources state
+  const [sources, setSources] = useState([])
   const [loading, setLoading] = useState(true)
   const [links, setLinks] = useState([])
   const [currentUser, setCurrentUser] = useState(null)
@@ -29,12 +29,15 @@ export default function CreateCampaignLink() {
   const [showAddDomain, setShowAddDomain] = useState(false)
   const [showAddSource, setShowAddSource] = useState(false)
   
-  // Form state - add source field
+  // 🔹 Move selectedPublisherIds to parent component
+  const [selectedPublisherIds, setSelectedPublisherIds] = useState({})
+  
+  // Form state
   const [formData, setFormData] = useState({
     domainUrl: "",
     campaignId: "",
     advertiserId: "all",
-    source: "" // Add source field
+    source: ""
   })
 
   // Get current authenticated user
@@ -165,10 +168,19 @@ export default function CreateCampaignLink() {
     }))
   }
 
+  // Handle publisher ID changes from child component
+  const handlePublisherChange = (campaignId, value) => {
+    setSelectedPublisherIds((prev) => ({
+      ...prev,
+      [campaignId]: value,
+    }));
+  };
+
   // Generate campaign link with user profileId
   const generateLink = (campaign) => {
     const { domainUrl, advertiserId, source } = formData
     const campaignId = campaign.campaignId
+    const publisherId = selectedPublisherIds[campaign.id] // Now this is defined
     
     if (!domainUrl || !campaignId) {
       toast.error("Please select a domain and campaign")
@@ -183,26 +195,23 @@ export default function CreateCampaignLink() {
     // Generate click_id
     const clickId = generateClickId()
     
-    // Create SHORT tracking link
-    const shortTrackingLink = `api/track-click/${clickId}`
-    const fullTrackingLink = `${domainUrl}${shortTrackingLink}`
+    // Create the new intermediate URL structure
+    const intermediateLink = `${domainUrl}/demo?click_id=${clickId}&affiliate_id=${userProfile.profileId}&campaign_id=${campaignId}&advertiser_id=${advertiserId || ''}&publisher_id=${publisherId || ''}&source=${source || ''}&domain=${encodeURIComponent(domainUrl)}`
 
-    // Store tracking data immediately in Firestore
+    // Store basic tracking data immediately in Firestore
     const trackingData = {
       clickId: clickId,
       campaignId: campaignId,
       campaignTitle: campaign.title,
       previewUrl: campaign.previewUrl || '',
       advertiserId: advertiserId !== "all" ? advertiserId : null,
+      publisherId: publisherId || null,
       affiliateId: userProfile.profileId,
       domainUrl: domainUrl,
-      source: source || null, // Add source to tracking data
+      source: source || null,
       status: 'pending',
       createdAt: new Date().toISOString(),
       generatedBy: userProfile.name || userProfile.email,
-      ipAddress: null,
-      userAgent: null,
-      clickedAt: null
     }
 
     // Pre-create the document in affiliateLinks collection
@@ -225,10 +234,11 @@ export default function CreateCampaignLink() {
       campaignId: campaignId,
       campaignTitle: campaign.title,
       advertiserId: advertiserId !== "all" ? advertiserId : null,
-      source: source || null, // Add source to generated link
+      publisherId: publisherId || null,
+      source: source || null,
       profileId: userProfile.profileId,
       clickId: clickId,
-      trackingLink: fullTrackingLink,
+      trackingLink: intermediateLink,
       createdAt: new Date(),
       generatedBy: userProfile.name || userProfile.email
     }
@@ -270,7 +280,7 @@ export default function CreateCampaignLink() {
           <LinkConfiguration
             formData={formData}
             domains={domains}
-            sources={sources} // Pass sources to LinkConfiguration
+            sources={sources}
             advertisers={advertisers}
             onInputChange={handleInputChange}
             onAddDomain={() => setShowAddDomain(true)}
@@ -281,6 +291,8 @@ export default function CreateCampaignLink() {
           <CampaignsTable
             campaigns={campaigns}
             formData={formData}
+            selectedPublisherIds={selectedPublisherIds}
+            onPublisherChange={handlePublisherChange}
             onGenerateLink={generateLink}
           />
 
