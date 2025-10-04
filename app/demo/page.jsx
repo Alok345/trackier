@@ -1,6 +1,7 @@
+// app/demo/page.jsx
 "use client"
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { doc, getDoc, setDoc, updateDoc, arrayUnion, getDocs, collection } from 'firebase/firestore'
 import { firestore } from '@/lib/firestore'
@@ -10,32 +11,55 @@ export default function DemoPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const searchParams = useSearchParams()
+  const hasRun = useRef(false)
 
   useEffect(() => {
+    // 🔹 Prevent the effect from running multiple times
+    if (hasRun.current) return
+    hasRun.current = true
+
     const trackAndRedirect = async () => {
       try {
-        // Get parameters from the URL
-        const clickId = searchParams.get('click_id')
-        const affiliateId = searchParams.get('affiliate_id')
-        const campaignId = searchParams.get('campaign_id')
-        const advertiserId = searchParams.get('advertiser_id')
-        const publisherId = searchParams.get('publisher_id')
-        const source = searchParams.get('source')
-        const domain = searchParams.get('domain')
+        // Get only session_id from URL
+        const sessionId = searchParams.get('session_id')
 
-        console.log('🔗 Received parameters:', {
-          clickId,
+        console.log('🔗 Received session_id:', sessionId)
+
+        if (!sessionId) {
+          throw new Error('Missing session_id parameter')
+        }
+
+        // Fetch campaign data from Firebase using session_id
+        const sessionDocRef = doc(firestore, "campaignSessions", sessionId)
+        const sessionDocSnap = await getDoc(sessionDocRef)
+
+        if (!sessionDocSnap.exists()) {
+          throw new Error('Session data not found')
+        }
+
+        const sessionData = sessionDocSnap.data()
+        
+        // Extract parameters from stored session data
+        const {
           affiliateId,
           campaignId,
           advertiserId,
           publisherId,
           source,
-          domain
-        })
+          domain,
+          campaignTitle,
+          previewUrl
+        } = sessionData
 
-        if (!clickId || !affiliateId) {
-          throw new Error('Missing required parameters: click_id and affiliate_id')
-        }
+        console.log('📦 Retrieved parameters from database:', {
+          affiliateId,
+          campaignId,
+          advertiserId,
+          publisherId,
+          source,
+          domain,
+          campaignTitle
+        })
 
         // Get user information
         const userAgent = navigator.userAgent
@@ -50,9 +74,52 @@ export default function DemoPage() {
           console.error('Error fetching IP:', ipError)
         }
 
+        console.log('🌐 User IP Address:', ipAddress)
+
+        // Get or create affiliate document
+        const affiliateDocRef = doc(firestore, "affiliateLinks", affiliateId)
+        const affiliateDocSnap = await getDoc(affiliateDocRef)
+
+        let clickId;
+        let userSessionData;
+        let isNewClick = false;
+
+        if (affiliateDocSnap.exists()) {
+          const affiliateData = affiliateDocSnap.data()
+          
+          // Check if this IP already has any session for this campaign
+          const existingSession = affiliateData.userSessions?.find(
+            session => session.ipAddress === ipAddress && session.campaignId === campaignId
+          )
+          
+          if (existingSession) {
+            // 🔹 SAME IP & SAME CAMPAIGN: Reuse existing clickId
+            clickId = existingSession.clickId
+            console.log('🔄 Reusing existing clickId for same IP and campaign:', clickId)
+            isNewClick = false;
+          } else {
+            // 🔹 NEW IP or DIFFERENT CAMPAIGN: Generate new clickId
+            clickId = generateClickId()
+            console.log('🆕 Generating new clickId for new IP or different campaign:', clickId)
+            isNewClick = true;
+          }
+        } else {
+          // 🔹 NEW AFFILIATE: Generate new clickId
+          clickId = generateClickId()
+          console.log('🆕 Generating new clickId for new affiliate:', clickId)
+          isNewClick = true;
+        }
+
         // Create user session data
-        const userSession = {
-          sessionId: generateClickId(),
+        userSessionData = {
+          clickId,
+          sessionId,
+          campaignId,
+          campaignTitle,
+          advertiserId,
+          publisherId,
+          source,
+          domain,
           ipAddress,
           userAgent,
           timestamp: new Date().toISOString(),
@@ -61,89 +128,70 @@ export default function DemoPage() {
           language: navigator.language,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           cookiesEnabled: navigator.cookieEnabled,
-          javaEnabled: navigator.javaEnabled ? navigator.javaEnabled() : false
+          javaEnabled: navigator.javaEnabled ? navigator.javaEnabled() : false,
+          sessionType: isNewClick ? 'first_click' : 'repeat_click',
+          clickCount: 1,
+          browserSessionId: generateClickId() // Unique ID for this browser session
         }
 
-        console.log('👤 User session data:', userSession)
+        // 🔹 Check if this exact browser session already exists
+        const currentAffiliateData = affiliateDocSnap.exists() ? affiliateDocSnap.data() : null
+        const existingBrowserSession = currentAffiliateData?.userSessions?.find(
+          session => session.browserSessionId === userSessionData.browserSessionId
+        )
 
-        // Create or update the document in affiliateLinks collection
-        const docRef = doc(firestore, "affiliateLinks", affiliateId)
-        const docSnap = await getDoc(docRef)
-
-        const sessionData = {
-          clickId,
-          campaignId,
-          advertiserId,
-          publisherId,
-          source,
-          domain,
-          ...userSession
-        }
-
-        if (docSnap.exists()) {
-          // Update existing document - add new user session to array
-          await updateDoc(docRef, {
-            userSessions: arrayUnion(sessionData),
-            totalClicks: (docSnap.data().totalClicks || 0) + 1,
-            lastActivity: new Date().toISOString()
-          })
-          console.log('✅ Updated existing affiliate document')
+        if (existingBrowserSession) {
+          console.log('🔄 Browser session already processed, redirecting...')
         } else {
-          // Create new document with first user session
-          await setDoc(docRef, {
-            affiliateId,
-            userSessions: [sessionData],
-            totalClicks: 1,
-            createdAt: new Date().toISOString(),
-            lastActivity: new Date().toISOString()
-          })
-          console.log('✅ Created new affiliate document')
+          // Update affiliate document with new session
+          if (affiliateDocSnap.exists()) {
+            await updateDoc(affiliateDocRef, {
+              userSessions: arrayUnion(userSessionData),
+              totalClicks: (currentAffiliateData.totalClicks || 0) + 1,
+              lastActivity: new Date().toISOString()
+            })
+            console.log('✅ Added new session to affiliate document for browser:', userSessionData.browserSessionId)
+          } else {
+            await setDoc(affiliateDocRef, {
+              affiliateId,
+              userSessions: [userSessionData],
+              totalClicks: 1,
+              createdAt: new Date().toISOString(),
+              lastActivity: new Date().toISOString()
+            })
+            console.log('✅ Created new affiliate document for browser:', userSessionData.browserSessionId)
+          }
         }
 
-        // Also update the individual click document
-        const clickDocRef = doc(firestore, "affiliateLinks", clickId)
-        await setDoc(clickDocRef, {
-          clickId,
-          campaignId,
-          advertiserId,
-          publisherId,
-          affiliateId,
-          source,
-          domain,
-          status: 'clicked',
-          ...userSession,
-          createdAt: new Date().toISOString()
+        // Update session document to track multiple browser usage (don't mark as fully processed)
+        await updateDoc(sessionDocRef, {
+          clickId: clickId,
+          ipAddress: ipAddress,
+          lastProcessedAt: new Date().toISOString(),
+          isRepeatClick: !isNewClick,
+          totalBrowserSessions: (sessionData.totalBrowserSessions || 0) + 1
         }, { merge: true })
 
-        console.log('✅ Updated click document')
-
-        // Get the preview URL from the campaign data
-        const previewUrl = await getPreviewUrl(campaignId)
-        
-        console.log('🌐 Preview URL:', previewUrl)
+        console.log('🌐 Preview URL from database:', previewUrl)
 
         if (!previewUrl) {
-          throw new Error('Preview URL not found for campaign: ' + campaignId)
+          throw new Error('Preview URL not found in session data')
         }
 
-        // Construct the final preview URL with all parameters
+        // Construct the final preview URL with all parameters from database
         const finalUrl = new URL(previewUrl)
         
-        // Add all tracking parameters
+        // Add all tracking parameters from the database
         finalUrl.searchParams.set('click_id', clickId)
         finalUrl.searchParams.set('campaign_id', campaignId || '')
         finalUrl.searchParams.set('affiliate_id', affiliateId || '')
         
-        if (advertiserId) finalUrl.searchParams.set('advertiser_id', advertiserId)
-        if (publisherId) finalUrl.searchParams.set('publisher_id', publisherId)
-        if (source) finalUrl.searchParams.set('source', source)
-        if (domain) finalUrl.searchParams.set('domain', domain)
-        
+        if (publisherId) finalUrl.searchParams.set('pub_id', publisherId)
         finalUrl.searchParams.set('force_transparent', 'true')
-        finalUrl.searchParams.set('tracking_source', 'tracking_system')
-        finalUrl.searchParams.set('session_id', userSession.sessionId)
-
-        console.log('🎯 Final redirect URL:', finalUrl.toString())
+        if (source) finalUrl.searchParams.set('source', source)
+        if (domain) finalUrl.searchParams.set('url', domain)
+        
+        console.log('🎯 Final redirect URL with parameters from DB:', finalUrl.toString())
 
         // Redirect to the final preview URL
         setTimeout(() => {
@@ -163,61 +211,12 @@ export default function DemoPage() {
     }
 
     trackAndRedirect()
-  }, [searchParams])
 
-  const getPreviewUrl = async (campaignId) => {
-    if (!campaignId) return null
-    
-    try {
-      console.log('🔍 Looking for campaign:', campaignId)
-      
-      // Try to find campaign by campaignId field in all campaigns
-      const campaignsQuery = collection(firestore, "campaigns")
-      const campaignsSnapshot = await getDocs(campaignsQuery)
-      let previewUrl = null
-      let campaignTitle = ''
-      
-      campaignsSnapshot.forEach((doc) => {
-        const data = doc.data()
-        if (data.campaignId === campaignId) {
-          previewUrl = data.previewUrl
-          campaignTitle = data.title
-          console.log('✅ Found campaign by campaignId:', data.title)
-        }
-      })
-
-      // If not found by campaignId, try by document ID
-      if (!previewUrl) {
-        try {
-          const campaignDoc = await getDoc(doc(firestore, "campaigns", campaignId))
-          if (campaignDoc.exists()) {
-            const data = campaignDoc.data()
-            previewUrl = data.previewUrl
-            campaignTitle = data.title
-            console.log('✅ Found campaign by document ID:', data.title)
-          }
-        } catch (error) {
-          console.log('❌ Campaign not found by document ID:', campaignId)
-        }
-      }
-
-      // Update the click document with campaign title
-      if (campaignTitle) {
-        const clickId = searchParams.get('click_id')
-        if (clickId) {
-          const clickDocRef = doc(firestore, "affiliateLinks", clickId)
-          await updateDoc(clickDocRef, {
-            campaignTitle: campaignTitle
-          })
-        }
-      }
-
-      return previewUrl
-    } catch (error) {
-      console.error('❌ Error fetching preview URL:', error)
-      return null
+    // 🔹 Cleanup function to prevent further executions
+    return () => {
+      hasRun.current = true
     }
-  }
+  }, [searchParams])
 
   if (loading) {
     return (
@@ -225,7 +224,7 @@ export default function DemoPage() {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
           <p className="mt-4 text-gray-600">Processing your request...</p>
-          <p className="text-sm text-gray-500">Please wait while we redirect you...</p>
+          <p className="text-sm text-gray-500">Loading campaign data...</p>
         </div>
       </div>
     )

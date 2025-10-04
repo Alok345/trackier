@@ -44,9 +44,6 @@ export default function CampaignsTable({
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 
-  // Remove local state for selectedPublisherIds since it's now from parent
-  // const [selectedPublisherIds, setSelectedPublisherIds] = useState({});
-
   // 🔹 Store publisher ranges from Firestore
   const [publisherRanges, setPublisherRanges] = useState([]);
 
@@ -107,6 +104,15 @@ export default function CampaignsTable({
     onPublisherChange(campaignId, value);
   };
 
+  // 🔹 Check if all mandatory fields are selected for a specific campaign
+  const isCreateLinkDisabled = (campaignId) => {
+    const isPublisherSelected = !!selectedPublisherIds[campaignId];
+    const isDomainSelected = !!formData.domainUrl;
+    const isSourceSelected = !!formData.source;
+    
+    return !(isPublisherSelected && isDomainSelected && isSourceSelected);
+  };
+
   return (
     <Card>
       <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -154,6 +160,20 @@ export default function CampaignsTable({
       </CardHeader>
 
       <CardContent>
+        {/* 🔹 Mandatory Fields Warning */}
+        {(!formData.domainUrl || !formData.source) && (
+          <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+            <div className="flex items-center text-yellow-800 text-sm">
+              <span className="font-medium">⚠️ Required Fields:</span>
+              <span className="ml-2">
+                {!formData.domainUrl && "Domain URL, "}
+                {!formData.source && "Source"}
+                {!formData.domainUrl && !formData.source && " must be selected"}
+              </span>
+            </div>
+          </div>
+        )}
+
         {filteredCampaigns.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">
             {campaigns.length === 0
@@ -167,7 +187,7 @@ export default function CampaignsTable({
                 <TableRow>
                   <TableHead>Preview URL</TableHead>
                   <TableHead>Campaign</TableHead>
-                  <TableHead>Publisher ID</TableHead>
+                  <TableHead>Publisher ID *</TableHead>
                   <TableHead>Advertiser</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Action</TableHead>
@@ -211,8 +231,10 @@ export default function CampaignsTable({
                           handlePublisherChange(campaign.id, val)
                         }
                       >
-                        <SelectTrigger className="w-[120px]">
-                          <SelectValue placeholder="Select ID" />
+                        <SelectTrigger className={`w-[120px] ${
+                          !selectedPublisherIds[campaign.id] ? 'border-red-300 bg-red-50' : ''
+                        }`}>
+                          <SelectValue placeholder="Select ID *" />
                         </SelectTrigger>
                         <SelectContent>
                           {publisherRanges.length > 0 ? (
@@ -231,6 +253,9 @@ export default function CampaignsTable({
                           )}
                         </SelectContent>
                       </Select>
+                      {!selectedPublisherIds[campaign.id] && (
+                        <p className="text-xs text-red-500 mt-1">Required</p>
+                      )}
                     </TableCell>
 
                     <TableCell>
@@ -245,7 +270,7 @@ export default function CampaignsTable({
                       </Badge>
                     </TableCell>
 
-                    {/* Action button now also sends publisherId */}
+                    {/* Action button - disabled until all mandatory fields are selected */}
                     <TableCell className="text-right">
                       <Button
                         onClick={() =>
@@ -254,15 +279,25 @@ export default function CampaignsTable({
                             publisherId: selectedPublisherIds[campaign.id] || null,
                           })
                         }
-                        disabled={!formData.domainUrl}
+                        disabled={isCreateLinkDisabled(campaign.id)}
                         size="sm"
+                        className={
+                          isCreateLinkDisabled(campaign.id) 
+                            ? "bg-gray-300 cursor-not-allowed" 
+                            : "bg-slate-800 hover:bg-slate-900"
+                        }
                       >
                         <Link className="h-4 w-4 mr-2" />
                         Create Link
                       </Button>
+                      {isCreateLinkDisabled(campaign.id) && (
+                        <p className="text-xs text-red-500 mt-1 text-center">
+                          Select all required fields
+                        </p>
+                      )}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button>
+                      <Button disabled={isCreateLinkDisabled(campaign.id)}>
                         <Link className="h-4 w-4 mr-2" />
                         Create Google Link
                       </Button>

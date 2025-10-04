@@ -177,75 +177,77 @@ export default function CreateCampaignLink() {
   };
 
   // Generate campaign link with user profileId
-  const generateLink = (campaign) => {
-    const { domainUrl, advertiserId, source } = formData
-    const campaignId = campaign.campaignId
-    const publisherId = selectedPublisherIds[campaign.id] // Now this is defined
-    
-    if (!domainUrl || !campaignId) {
-      toast.error("Please select a domain and campaign")
-      return
-    }
-
-    if (!userProfile) {
-      toast.error("User profile not found. Please log in again.")
-      return
-    }
-
-    // Generate click_id
-    const clickId = generateClickId()
-    
-    // Create the new intermediate URL structure
-    const intermediateLink = `${domainUrl}/demo?click_id=${clickId}&affiliate_id=${userProfile.profileId}&campaign_id=${campaignId}&advertiser_id=${advertiserId || ''}&publisher_id=${publisherId || ''}&source=${source || ''}&domain=${encodeURIComponent(domainUrl)}`
-
-    // Store basic tracking data immediately in Firestore
-    const trackingData = {
-      clickId: clickId,
-      campaignId: campaignId,
-      campaignTitle: campaign.title,
-      previewUrl: campaign.previewUrl || '',
-      advertiserId: advertiserId !== "all" ? advertiserId : null,
-      publisherId: publisherId || null,
-      affiliateId: userProfile.profileId,
-      domainUrl: domainUrl,
-      source: source || null,
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-      generatedBy: userProfile.name || userProfile.email,
-    }
-
-    // Pre-create the document in affiliateLinks collection
-    const createTrackingDocument = async () => {
-      try {
-        const docRef = doc(firestore, "affiliateLinks", clickId)
-        await setDoc(docRef, trackingData)
-        console.log("Pre-created tracking document:", clickId)
-      } catch (error) {
-        console.error("Error pre-creating tracking document:", error)
-      }
-    }
-    
-    createTrackingDocument()
-
-    // Add to links list
-    const newLink = {
-      id: Date.now().toString(),
-      domainUrl: domainUrl,
-      campaignId: campaignId,
-      campaignTitle: campaign.title,
-      advertiserId: advertiserId !== "all" ? advertiserId : null,
-      publisherId: publisherId || null,
-      source: source || null,
-      profileId: userProfile.profileId,
-      clickId: clickId,
-      trackingLink: intermediateLink,
-      createdAt: new Date(),
-      generatedBy: userProfile.name || userProfile.email
-    }
-
-    setLinks(prev => [newLink, ...prev])
-    toast.success("Link generated successfully!")
+  // In your CampaignsTable component, update the generateLink function:
+// In your CampaignsTable component, update the generateLink function:
+const generateLink = (campaign) => {
+  const { domainUrl, advertiserId, source } = formData
+  const campaignId = campaign.campaignId
+  const publisherId = selectedPublisherIds[campaign.id]
+  
+  if (!domainUrl || !campaignId) {
+    toast.error("Please select a domain and campaign")
+    return
   }
+
+  if (!userProfile) {
+    toast.error("User profile not found. Please log in again.")
+    return
+  }
+
+  // Store campaign data in Firebase first
+  const storeCampaignData = async () => {
+    try {
+      const sessionId = generateClickId(); // Generate a unique session ID
+      
+      // Store all parameters in Firebase under the sessionId
+      const sessionDocRef = doc(firestore, "campaignSessions", sessionId)
+      await setDoc(sessionDocRef, {
+        sessionId,
+        affiliateId: userProfile.profileId,
+        campaignId: campaignId,
+        advertiserId: advertiserId !== "all" ? advertiserId : null,
+        publisherId: publisherId || null,
+        source: source || null,
+        domain: domainUrl,
+        campaignTitle: campaign.title,
+        previewUrl: campaign.previewUrl || '',
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        generatedBy: userProfile.name || userProfile.email
+      })
+
+      console.log('✅ Campaign data stored with sessionId:', sessionId)
+
+      // Create the base demo URL with only sessionId
+      const baseDemoLink = `${domainUrl}/demo?session_id=${sessionId}`
+
+      // Add to links list
+      const newLink = {
+        id: Date.now().toString(),
+        domainUrl: domainUrl,
+        campaignId: campaignId,
+        campaignTitle: campaign.title,
+        advertiserId: advertiserId !== "all" ? advertiserId : null,
+        publisherId: publisherId || null,
+        source: source || null,
+        profileId: userProfile.profileId,
+        sessionId: sessionId,
+        trackingLink: baseDemoLink, // Only base URL with session_id
+        createdAt: new Date(),
+        generatedBy: userProfile.name || userProfile.email
+      }
+
+      setLinks(prev => [newLink, ...prev])
+      toast.success("Link generated successfully!")
+
+    } catch (error) {
+      console.error('Error storing campaign data:', error)
+      toast.error("Failed to generate link")
+    }
+  }
+
+  storeCampaignData()
+}
 
   // Handle domain added successfully
   const handleDomainAdded = () => {

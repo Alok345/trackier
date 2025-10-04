@@ -22,16 +22,33 @@ export default function LinkConfiguration({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Required Fields Warning */}
+        {(!formData.domainUrl || !formData.source) && (
+          <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+            <div className="flex items-center text-yellow-800 text-sm">
+              <span className="font-medium">⚠️ Required Fields Missing:</span>
+              <span className="ml-2">
+                {!formData.domainUrl && "Domain URL, "}
+                {!formData.source && "Source"}
+                {!formData.domainUrl && !formData.source && " must be selected to generate links"}
+              </span>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Domain URL Dropdown */}
+          {/* Domain URL Dropdown - REQUIRED */}
           <div className="space-y-2">
-            <Label htmlFor="domainUrl">Domain URL</Label>
+            <Label htmlFor="domainUrl" className="flex items-center gap-1">
+              Domain URL
+              <span className="text-red-500">*</span>
+            </Label>
             <Select 
               value={formData.domainUrl} 
               onValueChange={(value) => onInputChange("domainUrl", value)}
             >
-              <SelectTrigger>
-                <SelectValue placeholder="Select domain" />
+              <SelectTrigger className={!formData.domainUrl ? 'border-red-300 bg-red-50' : ''}>
+                <SelectValue placeholder="Select domain *" />
               </SelectTrigger>
               <SelectContent>
                 {domains.length === 0 ? (
@@ -47,23 +64,31 @@ export default function LinkConfiguration({
                 )}
               </SelectContent>
             </Select>
-            <p className="text-sm text-muted-foreground">
-              Select a domain to generate tracking links
-            </p>
+            {!formData.domainUrl ? (
+              <p className="text-sm text-red-500">
+                Domain URL is required
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Selected domain for tracking links
+              </p>
+            )}
           </div>
 
-          {/* Source Select */}
+          {/* Source Select - REQUIRED */}
           <div className="space-y-2">
-            <Label htmlFor="source">Source (Optional)</Label>
+            <Label htmlFor="source" className="flex items-center gap-1">
+              Source
+              <span className="text-red-500">*</span>
+            </Label>
             <Select 
               value={formData.source} 
               onValueChange={(value) => onInputChange("source", value)}
             >
-              <SelectTrigger>
-                <SelectValue placeholder="Select source" />
+              <SelectTrigger className={!formData.source ? 'border-red-300 bg-red-50' : ''}>
+                <SelectValue placeholder="Select source *" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all-sources">All Sources</SelectItem>
                 {sources.length === 0 ? (
                   <SelectItem value="no-sources" disabled>
                     No sources available
@@ -77,9 +102,18 @@ export default function LinkConfiguration({
                 )}
               </SelectContent>
             </Select>
+            {!formData.source ? (
+              <p className="text-sm text-red-500">
+                Source is required
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Traffic source identifier
+              </p>
+            )}
           </div>
 
-          {/* Advertiser Select */}
+          {/* Advertiser Select - OPTIONAL */}
           <div className="space-y-2">
             <Label htmlFor="advertiserId">Advertiser (Optional)</Label>
             <Select 
@@ -98,6 +132,22 @@ export default function LinkConfiguration({
                 ))}
               </SelectContent>
             </Select>
+            <p className="text-sm text-muted-foreground">
+              Filter by specific advertiser
+            </p>
+          </div>
+        </div>
+
+        {/* Configuration Status */}
+        <div className="p-3 bg-gray-50 rounded-md">
+          <div className="text-sm text-gray-600">
+            <span className="font-medium">Configuration Status:</span>
+            <span className={`ml-2 ${formData.domainUrl && formData.source ? 'text-green-600' : 'text-red-600'}`}>
+              {formData.domainUrl && formData.source 
+                ? '✅ Ready to generate links' 
+                : '❌ Select Domain URL and Source to enable link generation'
+              }
+            </span>
           </div>
         </div>
       </CardContent>
