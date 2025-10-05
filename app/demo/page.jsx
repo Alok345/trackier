@@ -55,14 +55,14 @@ export default function DemoPage() {
             // Reuse existing clickID
             clickId = sessionData.clickId
             isRepeatClick = true
-            console.log('🔄 Reusing existing clickID from localStorage:', clickId)
+            // console.log('🔄 Reusing existing clickID from localStorage:', clickId)
           }
         }
 
         // If no valid session found, create new one
         if (!clickId) {
           clickId = generateClickId()
-          console.log('🆕 Generated new clickID:', clickId)
+          // console.log('🆕 Generated new clickID:', clickId)
         }
 
         // Update or create session in localStorage
@@ -144,8 +144,8 @@ export default function DemoPage() {
               })
             }
 
-            console.log('💾 Stored tracking data with clickID:', clickId)
-            console.log('🔄 Repeat click:', isRepeatClick)
+            // console.log('💾 Stored tracking data with clickID:', clickId)
+            // console.log('🔄 Repeat click:', isRepeatClick)
 
           } catch (fireErr) {
             console.error("Failed to write tracking data:", fireErr)
@@ -170,9 +170,9 @@ export default function DemoPage() {
         redirectApi.searchParams.set("redirect_url", redirectUrl || domain || "https://example.com")
         redirectApi.searchParams.set("is_repeat_click", isRepeatClick.toString())
 
-        console.log('🔗 Redirecting to API with click_id as first parameter:', clickId)
-        console.log('🔄 Is repeat click:', isRepeatClick)
-        console.log('📋 API URL:', redirectApi.toString())
+        // console.log('🔗 Redirecting to API with click_id as first parameter:', clickId)
+        // console.log('🔄 Is repeat click:', isRepeatClick)
+        // console.log('📋 API URL:', redirectApi.toString())
 
         setTimeout(() => {
           window.location.href = redirectApi.toString()

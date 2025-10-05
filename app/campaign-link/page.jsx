@@ -75,7 +75,7 @@ export default function CreateCampaignLink() {
         const userData = userDoc.data()
         setUserProfile(userData)
       } else {
-        console.log("No user profile found")
+        // console.log("No user profile found")
         toast.error("User profile not found")
       }
     } catch (error) {
@@ -239,8 +239,8 @@ const generateTrackingLink = (campaign) => {
     }
   })
 
-  console.log('🎯 Generated Tracking URL to Demo Page:', trackingUrl.toString())
-  console.log('📋 All Parameters Passed to Demo:', trackingParams)
+  // console.log('🎯 Generated Tracking URL to Demo Page:', trackingUrl.toString())
+  // console.log('📋 All Parameters Passed to Demo:', trackingParams)
 
   return {
     fullLink: trackingUrl.toString(),

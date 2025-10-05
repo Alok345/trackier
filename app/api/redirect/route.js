@@ -254,8 +254,8 @@ export async function GET(req) {
     console.error("[API] Firestore logging failed:", e)
   }
 
-  console.log('🎯 Final redirect URL with click_id as first parameter:', finalRedirect)
-  console.log('🔄 Is repeat click:', sp.get("is_repeat_click") === "true" ? 'Yes' : 'No')
+//   console.log('🎯 Final redirect URL with click_id as first parameter:', finalRedirect)
+//   console.log('🔄 Is repeat click:', sp.get("is_repeat_click") === "true" ? 'Yes' : 'No')
   return Response.redirect(finalRedirect, 302)
 }
 
