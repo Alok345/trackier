@@ -1,209 +1,184 @@
-// app/demo/page.jsx
 "use client"
 
-import { useEffect, useState, useRef } from 'react'
-import { useSearchParams } from 'next/navigation'
-import { doc, getDoc, setDoc, updateDoc, arrayUnion, getDocs, collection } from 'firebase/firestore'
-import { firestore } from '@/lib/firestore'
-import { generateClickId } from '@/lib/affiliateUtils'
+import { useEffect, useState, useRef } from "react"
+import { useSearchParams } from "next/navigation"
+import { doc, getDoc, setDoc, updateDoc, arrayUnion } from "firebase/firestore"
+import { firestore } from "@/lib/firestore"
+import { generateClickId, getClientIP } from "@/lib/affiliateUtils"
 
 export default function DemoPage() {
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [error, setError] = useState("")
   const searchParams = useSearchParams()
   const hasRun = useRef(false)
 
   useEffect(() => {
-    // 🔹 Prevent the effect from running multiple times
     if (hasRun.current) return
     hasRun.current = true
 
     const trackAndRedirect = async () => {
       try {
-        // Get only session_id from URL
-        const sessionId = searchParams.get('session_id')
+        // Extract all tracking params
+        const campaignId = searchParams.get("campaign_id")
+        const affiliateId = searchParams.get("affiliate_id")
+        const publisherId = searchParams.get("pub_id") || searchParams.get("publisher_id")
+        const source = searchParams.get("source") || searchParams.get("utm_source")
+        const domain = searchParams.get("url") || searchParams.get("tracking_domain")
+        const advertiserId = searchParams.get("advertiser_id")
+        const offerId = searchParams.get("offer_id")
+        const pid = searchParams.get("pid")
+        const redirectUrl = searchParams.get("redirect_url")
 
-        console.log('🔗 Received session_id:', sessionId)
-
-        if (!sessionId) {
-          throw new Error('Missing session_id parameter')
-        }
-
-        // Fetch campaign data from Firebase using session_id
-        const sessionDocRef = doc(firestore, "campaignSessions", sessionId)
-        const sessionDocSnap = await getDoc(sessionDocRef)
-
-        if (!sessionDocSnap.exists()) {
-          throw new Error('Session data not found')
-        }
-
-        const sessionData = sessionDocSnap.data()
-        
-        // Extract parameters from stored session data
-        const {
-          affiliateId,
-          campaignId,
-          advertiserId,
-          publisherId,
-          source,
-          domain,
-          campaignTitle,
-          previewUrl
-        } = sessionData
-
-        console.log('📦 Retrieved parameters from database:', {
-          affiliateId,
-          campaignId,
-          advertiserId,
-          publisherId,
-          source,
-          domain,
-          campaignTitle
-        })
-
-        // Get user information
+        // Gather runtime info
         const userAgent = navigator.userAgent
-        
-        // Get IP address
-        let ipAddress = 'unknown'
+        let ipAddress = "unknown"
         try {
-          const ipResponse = await fetch('https://api.ipify.org?format=json')
-          const ipData = await ipResponse.json()
-          ipAddress = ipData.ip
-        } catch (ipError) {
-          console.error('Error fetching IP:', ipError)
+          ipAddress = await getClientIP()
+        } catch (e) {
+          console.error("Failed to get IP:", e)
         }
 
-        console.log('🌐 User IP Address:', ipAddress)
-
-        // Get or create affiliate document
-        const affiliateDocRef = doc(firestore, "affiliateLinks", affiliateId)
-        const affiliateDocSnap = await getDoc(affiliateDocRef)
-
-        let clickId;
-        let userSessionData;
-        let isNewClick = false;
-
-        if (affiliateDocSnap.exists()) {
-          const affiliateData = affiliateDocSnap.data()
+        // Generate a session key for localStorage
+        const sessionKey = `click_session_${affiliateId}_${campaignId}`
+        
+        // Check localStorage for existing session
+        let clickId
+        let isRepeatClick = false
+        
+        const existingSession = localStorage.getItem(sessionKey)
+        if (existingSession) {
+          const sessionData = JSON.parse(existingSession)
+          const timeDiff = Date.now() - sessionData.lastClick
+          const twentyFourHours = 24 * 60 * 60 * 1000
           
-          // Check if this IP already has any session for this campaign
-          const existingSession = affiliateData.userSessions?.find(
-            session => session.ipAddress === ipAddress && session.campaignId === campaignId
-          )
-          
-          if (existingSession) {
-            // 🔹 SAME IP & SAME CAMPAIGN: Reuse existing clickId
-            clickId = existingSession.clickId
-            console.log('🔄 Reusing existing clickId for same IP and campaign:', clickId)
-            isNewClick = false;
-          } else {
-            // 🔹 NEW IP or DIFFERENT CAMPAIGN: Generate new clickId
-            clickId = generateClickId()
-            console.log('🆕 Generating new clickId for new IP or different campaign:', clickId)
-            isNewClick = true;
+          if (timeDiff < twentyFourHours) {
+            // Reuse existing clickID
+            clickId = sessionData.clickId
+            isRepeatClick = true
+            console.log('🔄 Reusing existing clickID from localStorage:', clickId)
           }
-        } else {
-          // 🔹 NEW AFFILIATE: Generate new clickId
-          clickId = generateClickId()
-          console.log('🆕 Generating new clickId for new affiliate:', clickId)
-          isNewClick = true;
         }
 
-        // Create user session data
-        userSessionData = {
+        // If no valid session found, create new one
+        if (!clickId) {
+          clickId = generateClickId()
+          console.log('🆕 Generated new clickID:', clickId)
+        }
+
+        // Update or create session in localStorage
+        const sessionData = {
           clickId,
-          sessionId,
+          lastClick: Date.now(),
+          affiliateId,
           campaignId,
-          campaignTitle,
-          advertiserId,
+          ipAddress
+        }
+        localStorage.setItem(sessionKey, JSON.stringify(sessionData))
+
+        // Compose tracking data
+        const trackingData = {
+          clickId,
+          campaignId,
+          affiliateId,
           publisherId,
           source,
           domain,
+          advertiserId,
+          offerId,
+          pid,
           ipAddress,
           userAgent,
           timestamp: new Date().toISOString(),
-          referrer: document.referrer || 'direct',
-          screenResolution: `${screen.width}x${screen.height}`,
+          referrer: document.referrer || "direct",
+          screenResolution: `${window.screen.width}x${window.screen.height}`,
           language: navigator.language,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           cookiesEnabled: navigator.cookieEnabled,
-          javaEnabled: navigator.javaEnabled ? navigator.javaEnabled() : false,
-          sessionType: isNewClick ? 'first_click' : 'repeat_click',
-          clickCount: 1,
-          browserSessionId: generateClickId() // Unique ID for this browser session
+          javaEnabled: typeof navigator.javaEnabled === "function" ? navigator.javaEnabled() : false,
+          isRepeatClick: isRepeatClick
         }
 
-        // 🔹 Check if this exact browser session already exists
-        const currentAffiliateData = affiliateDocSnap.exists() ? affiliateDocSnap.data() : null
-        const existingBrowserSession = currentAffiliateData?.userSessions?.find(
-          session => session.browserSessionId === userSessionData.browserSessionId
-        )
+        // Store tracking info using affiliate_id
+        if (affiliateId) {
+          try {
+            const affiliateDocRef = doc(firestore, "affiliateLinks", affiliateId)
+            const affiliateDocSnap = await getDoc(affiliateDocRef)
 
-        if (existingBrowserSession) {
-          console.log('🔄 Browser session already processed, redirecting...')
-        } else {
-          // Update affiliate document with new session
-          if (affiliateDocSnap.exists()) {
-            await updateDoc(affiliateDocRef, {
-              userSessions: arrayUnion(userSessionData),
-              totalClicks: (currentAffiliateData.totalClicks || 0) + 1,
-              lastActivity: new Date().toISOString()
-            })
-            console.log('✅ Added new session to affiliate document for browser:', userSessionData.browserSessionId)
-          } else {
-            await setDoc(affiliateDocRef, {
-              affiliateId,
-              userSessions: [userSessionData],
-              totalClicks: 1,
-              createdAt: new Date().toISOString(),
-              lastActivity: new Date().toISOString()
-            })
-            console.log('✅ Created new affiliate document for browser:', userSessionData.browserSessionId)
+            if (affiliateDocSnap.exists()) {
+              await updateDoc(affiliateDocRef, {
+                trackingData: arrayUnion(trackingData),
+                totalClicks: (affiliateDocSnap.data().totalClicks || 0) + (isRepeatClick ? 0 : 1),
+                lastActivity: new Date().toISOString(),
+              })
+            } else {
+              await setDoc(affiliateDocRef, {
+                affiliateId,
+                trackingData: [trackingData],
+                totalClicks: 1,
+                createdAt: new Date().toISOString(),
+                lastActivity: new Date().toISOString(),
+              })
+            }
+
+            // Store/update session record by clickId
+            const sessionDocRef = doc(firestore, "trackingSessions", clickId)
+            const existingSession = await getDoc(sessionDocRef)
+            
+            if (existingSession.exists()) {
+              // Update existing session
+              const existingData = existingSession.data()
+              await updateDoc(sessionDocRef, {
+                ...trackingData,
+                clickCount: (existingData.clickCount || 1) + 1,
+                lastClickAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              })
+            } else {
+              // Create new session
+              await setDoc(sessionDocRef, {
+                ...trackingData,
+                clickCount: 1,
+                firstClickAt: new Date().toISOString(),
+                lastClickAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+              })
+            }
+
+            console.log('💾 Stored tracking data with clickID:', clickId)
+            console.log('🔄 Repeat click:', isRepeatClick)
+
+          } catch (fireErr) {
+            console.error("Failed to write tracking data:", fireErr)
+            // continue to redirect regardless
           }
         }
 
-        // Update session document to track multiple browser usage (don't mark as fully processed)
-        await updateDoc(sessionDocRef, {
-          clickId: clickId,
-          ipAddress: ipAddress,
-          lastProcessedAt: new Date().toISOString(),
-          isRepeatClick: !isNewClick,
-          totalBrowserSessions: (sessionData.totalBrowserSessions || 0) + 1
-        }, { merge: true })
-
-        console.log('🌐 Preview URL from database:', previewUrl)
-
-        if (!previewUrl) {
-          throw new Error('Preview URL not found in session data')
-        }
-
-        // Construct the final preview URL with all parameters from database
-        const finalUrl = new URL(previewUrl)
+        // Redirect via the server so it can log and compose URLs correctly
+        const redirectApi = new URL("/api/redirect", window.location.origin)
         
-        // Add all tracking parameters from the database
-        finalUrl.searchParams.set('click_id', clickId)
-        finalUrl.searchParams.set('campaign_id', campaignId || '')
-        finalUrl.searchParams.set('affiliate_id', affiliateId || '')
+        // Pass ALL original parameters plus the click_id
+        searchParams.forEach((value, key) => {
+          redirectApi.searchParams.set(key, value)
+        })
         
-        if (publisherId) finalUrl.searchParams.set('pub_id', publisherId)
-        finalUrl.searchParams.set('force_transparent', 'true')
-        if (source) finalUrl.searchParams.set('source', source)
-        if (domain) finalUrl.searchParams.set('url', domain)
-        
-        console.log('🎯 Final redirect URL with parameters from DB:', finalUrl.toString())
+        // Add the click_id (either existing or new)
+        redirectApi.searchParams.set("click_id", clickId)
+        redirectApi.searchParams.set("preview_url", window.location.href)
+        redirectApi.searchParams.set("redirect_url", redirectUrl || domain || "https://example.com")
+        redirectApi.searchParams.set("is_repeat_click", isRepeatClick.toString())
 
-        // Redirect to the final preview URL
+        console.log('🔗 Redirecting to API with click_id:', clickId)
+        console.log('🔄 Is repeat click:', isRepeatClick)
+        console.log('📋 API URL:', redirectApi.toString())
+
         setTimeout(() => {
-          window.location.href = finalUrl.toString()
-        }, 1000)
-
+          window.location.href = redirectApi.toString()
+        }, 300)
       } catch (err) {
-        console.error('❌ Error in tracking:', err)
-        setError(err.message || 'Failed to process your request. Redirecting...')
-        // Fallback redirect after error
+        console.error("Tracking error:", err)
+        setError(err?.message || "Something went wrong. Redirecting...")
         setTimeout(() => {
-          window.location.href = 'https://example.com'
+          window.location.href = "https://example.com"
         }, 3000)
       } finally {
         setLoading(false)
@@ -211,11 +186,6 @@ export default function DemoPage() {
     }
 
     trackAndRedirect()
-
-    // 🔹 Cleanup function to prevent further executions
-    return () => {
-      hasRun.current = true
-    }
   }, [searchParams])
 
   if (loading) {
@@ -224,7 +194,7 @@ export default function DemoPage() {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
           <p className="mt-4 text-gray-600">Processing your request...</p>
-          <p className="text-sm text-gray-500">Loading campaign data...</p>
+          <p className="text-sm text-gray-500">Tracking your click and redirecting...</p>
         </div>
       </div>
     )
