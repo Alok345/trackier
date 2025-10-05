@@ -139,7 +139,7 @@ export default function LinkConfiguration({
         </div>
 
         {/* Configuration Status */}
-        <div className="p-3 bg-gray-50 rounded-md">
+        {/* <div className="p-3 bg-gray-50 rounded-md">
           <div className="text-sm text-gray-600">
             <span className="font-medium">Configuration Status:</span>
             <span className={`ml-2 ${formData.domainUrl && formData.source ? 'text-green-600' : 'text-red-600'}`}>
@@ -149,7 +149,7 @@ export default function LinkConfiguration({
               }
             </span>
           </div>
-        </div>
+        </div> */}
       </CardContent>
     </Card>
   )

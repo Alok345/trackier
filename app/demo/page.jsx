@@ -25,8 +25,8 @@ export default function DemoPage() {
         const source = searchParams.get("source") || searchParams.get("utm_source")
         const domain = searchParams.get("url") || searchParams.get("tracking_domain")
         const advertiserId = searchParams.get("advertiser_id")
-        const offerId = searchParams.get("offer_id")
-        const pid = searchParams.get("pid")
+        // const offerId = searchParams.get("offer_id")
+        // const pid = searchParams.get("pid")
         const redirectUrl = searchParams.get("redirect_url")
 
         // Gather runtime info
@@ -84,8 +84,8 @@ export default function DemoPage() {
           source,
           domain,
           advertiserId,
-          offerId,
-          pid,
+          // offerId,
+          // pid,
           ipAddress,
           userAgent,
           timestamp: new Date().toISOString(),
