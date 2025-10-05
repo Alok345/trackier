@@ -21,8 +21,8 @@ export async function GET(req) {
     return out
   }
 
-  // Helper: merge params (without overwriting existing) into a URL string
-  const mergeParamsIntoUrl = (targetUrlString, paramsObj) => {
+  // Helper: merge params with click_id as first parameter
+  const mergeParamsIntoUrl = (targetUrlString, paramsObj, clickId) => {
     if (!targetUrlString) return targetUrlString
     let target
     try {
@@ -36,16 +36,42 @@ export async function GET(req) {
       }
     }
 
-    for (const [k, v] of Object.entries(paramsObj)) {
-      if (k == null || k === "" || v == null) continue
-      if (!target.searchParams.has(k)) {
-        target.searchParams.append(k, String(v))
+    // First, ensure click_id is the first parameter
+    if (clickId) {
+      // Remove existing click_id if any
+      target.searchParams.delete('click_id')
+      // Add click_id as first parameter by reconstructing the URL
+      const newSearchParams = new URLSearchParams()
+      newSearchParams.append('click_id', clickId)
+      
+      // Then add all other parameters
+      for (const [k, v] of Object.entries(paramsObj)) {
+        if (k == null || k === "" || v == null || k === 'click_id') continue
+        newSearchParams.append(k, String(v))
+      }
+      
+      // Also include any existing parameters from the target URL (except click_id)
+      for (const [k, v] of target.searchParams.entries()) {
+        if (k !== 'click_id') {
+          newSearchParams.append(k, v)
+        }
+      }
+      
+      target.search = newSearchParams.toString()
+    } else {
+      // If no click_id, use normal merging
+      for (const [k, v] of Object.entries(paramsObj)) {
+        if (k == null || k === "" || v == null) continue
+        if (!target.searchParams.has(k)) {
+          target.searchParams.append(k, String(v))
+        }
       }
     }
+    
     return target.toString()
   }
 
-  // Get the click_id from the request (passed from demo page)
+  // Get the click_id from the request (passed from demo page as first parameter)
   const clickId = sp.get("click_id")
   const redirectUrl = sp.get("redirect_url")
   
@@ -66,13 +92,8 @@ export async function GET(req) {
   const paramsToRemove = ['redirect_url', 'preview_url']
   paramsToRemove.forEach(param => delete allParams[param])
 
-  // Ensure click_id is included in the parameters
-  if (clickId) {
-    allParams.click_id = clickId
-  }
-
-  // Start by merging into the OUTER affiliate URL
-  let composedFinal = mergeParamsIntoUrl(decodedRedirectUrl, allParams)
+  // Start by merging into the OUTER affiliate URL WITH CLICK_ID AS FIRST PARAMETER
+  let composedFinal = mergeParamsIntoUrl(decodedRedirectUrl, allParams, clickId)
 
   // Now detect common nested URL parameter names and append the same params to them too
   const nestedKeys = ["lpurl", "url", "u", "redirect", "redir", "target", "dest", "destination", "to", "r"]
@@ -84,7 +105,8 @@ export async function GET(req) {
       const nestedDecoded = decodeNestedURI(nestedRaw)
       // Only attempt if the nested raw looks like a URL
       if (nestedDecoded && /^https?:\/\//i.test(nestedDecoded)) {
-        const mergedNested = mergeParamsIntoUrl(nestedDecoded, allParams)
+        // Ensure click_id is first parameter in nested URLs too
+        const mergedNested = mergeParamsIntoUrl(nestedDecoded, allParams, clickId)
         // Setting directly will auto-encode the nested URL as needed
         outerURL.searchParams.set(key, mergedNested)
       }
@@ -123,7 +145,8 @@ export async function GET(req) {
     }
 
     if (merchantResolved && /^https?:\/\//i.test(merchantResolved)) {
-      finalRedirect = mergeParamsIntoUrl(merchantResolved, allParams)
+      // Ensure click_id is first parameter in merchant URL too
+      finalRedirect = mergeParamsIntoUrl(merchantResolved, allParams, clickId)
       try {
         fetch(composedFinal).catch(() => {})
       } catch {}
@@ -203,7 +226,7 @@ export async function GET(req) {
         composedAffiliateUrl,
         finalUrl: resolvedFinalUrl,
         serverResolvedAt,
-        isRepeatClick: true // Mark as repeat click in affiliate logs
+        isRepeatClick: sp.get("is_repeat_click") === "true"
       }
 
       if (snap.exists()) {
@@ -212,7 +235,6 @@ export async function GET(req) {
           lastPreviewUrl: previewUrl,
           lastFinalUrl: resolvedFinalUrl,
           lastActivity: serverResolvedAt,
-          // Don't increment totalClicks for repeat clicks from same IP
           totalClicks: (snap.data().totalClicks || 0) + (logEntry.isRepeatClick ? 0 : 1),
         })
       } else {
@@ -232,8 +254,8 @@ export async function GET(req) {
     console.error("[API] Firestore logging failed:", e)
   }
 
-  console.log('🎯 Final redirect URL with click_id:', finalRedirect)
-  console.log('🔄 Is repeat click:', clickId ? 'Yes' : 'No')
+  console.log('🎯 Final redirect URL with click_id as first parameter:', finalRedirect)
+  console.log('🔄 Is repeat click:', sp.get("is_repeat_click") === "true" ? 'Yes' : 'No')
   return Response.redirect(finalRedirect, 302)
 }
 

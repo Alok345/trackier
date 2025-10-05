@@ -156,18 +156,21 @@ export default function DemoPage() {
         // Redirect via the server so it can log and compose URLs correctly
         const redirectApi = new URL("/api/redirect", window.location.origin)
         
-        // Pass ALL original parameters plus the click_id
+        // PASS CLICK_ID AS THE FIRST PARAMETER
+        redirectApi.searchParams.set("click_id", clickId)
+        
+        // Then add all other parameters
         searchParams.forEach((value, key) => {
-          redirectApi.searchParams.set(key, value)
+          if (key !== "click_id") { // Don't overwrite the click_id we just set
+            redirectApi.searchParams.set(key, value)
+          }
         })
         
-        // Add the click_id (either existing or new)
-        redirectApi.searchParams.set("click_id", clickId)
         redirectApi.searchParams.set("preview_url", window.location.href)
         redirectApi.searchParams.set("redirect_url", redirectUrl || domain || "https://example.com")
         redirectApi.searchParams.set("is_repeat_click", isRepeatClick.toString())
 
-        console.log('🔗 Redirecting to API with click_id:', clickId)
+        console.log('🔗 Redirecting to API with click_id as first parameter:', clickId)
         console.log('🔄 Is repeat click:', isRepeatClick)
         console.log('📋 API URL:', redirectApi.toString())
 

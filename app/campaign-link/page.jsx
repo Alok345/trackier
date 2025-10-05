@@ -254,8 +254,8 @@ const generateTrackingLink = (campaign) => {
       source,
       domain: domainUrl,
       finalUrl: campaign.previewUrl || domainUrl,
-      offerId: campaign.offerId,
-      pid: campaign.pid
+      // offerId: campaign.offerId,
+      // pid: campaign.pid
     }
   }
 }
