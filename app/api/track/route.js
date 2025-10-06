@@ -1,18 +1,30 @@
 import { NextResponse } from 'next/server'
-import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore'
+import { doc, getDoc, updateDoc, serverTimestamp, setDoc } from 'firebase/firestore'
 import { firestore } from '@/lib/firestore'
+import { generateClickId } from '@/lib/affiliateUtils'
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url)
   const forceTransparent = searchParams.get('force_transparent')
-  const clickId = searchParams.get('click_id')
+  let clickId = searchParams.get('click_id')
 
   console.log('🎯 TRACK API Route Called - Params:', { forceTransparent, clickId })
 
-  // Check required parameters
-  if (forceTransparent !== 'true' || !clickId) {
-    console.log('❌ Missing required parameters')
-    return NextResponse.redirect('https://example.com')
+  // Make force_transparent optional; generate clickId when missing
+  if (!clickId) {
+    clickId = generateClickId()
+    console.log('🆕 Generated clickId:', clickId)
+    // Create a placeholder document so subsequent updates work even if none exists yet
+    try {
+      await setDoc(doc(firestore, 'affiliateLinks', clickId), {
+        clickId,
+        status: 'generated',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }, { merge: true })
+    } catch (e) {
+      console.error('Failed to create placeholder affiliateLinks doc:', e)
+    }
   }
 
   try {
@@ -63,25 +75,8 @@ export async function GET(request) {
 
     console.log('✅ Click tracked successfully - Firestore updated')
 
-    // Build the final destination URL with all parameters
-    const finalUrl = new URL(previewUrl)
-    
-    // Add all tracking parameters
-    finalUrl.searchParams.set('click_id', clickId)
-    finalUrl.searchParams.set('campaign_id', trackingData.campaignId || '')
-    finalUrl.searchParams.set('affiliate_id', trackingData.affiliateId || '')
-    finalUrl.searchParams.set('force_transparent', 'true')
-    finalUrl.searchParams.set('source', 'tracking_system')
-    finalUrl.searchParams.set('tracking_domain', host)
-    
-    if (trackingData.advertiserId) {
-      finalUrl.searchParams.set('advertiser_id', trackingData.advertiserId)
-    }
-
-    console.log('🎯 Final Redirect URL:', finalUrl.toString())
-
-    // Perform the redirect
-    return NextResponse.redirect(finalUrl.toString(), 302)
+    // Redirect directly to the preview URL (do not append tracking params)
+    return NextResponse.redirect(previewUrl, 302)
 
   } catch (error) {
     console.error('💥 Error in TRACK API route:', error)

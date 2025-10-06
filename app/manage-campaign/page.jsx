@@ -1,22 +1,15 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { collection, getDocs, orderBy, query } from "firebase/firestore"
+import { collection, getDocs, orderBy, query, doc, getDoc, deleteDoc, getCountFromServer, updateDoc } from "firebase/firestore"
 import { firestore } from "@/lib/firestore"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { Search, Filter, MoreHorizontal, Eye, Edit, Trash2 } from "lucide-react"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { Search, Filter, Eye, Trash2, Pencil } from "lucide-react"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/app-sidebar"
@@ -26,6 +19,12 @@ export default function ManageCampaigns() {
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [selectedCampaign, setSelectedCampaign] = useState(null)
+  const [generatedCount, setGeneratedCount] = useState(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [editingCampaignId, setEditingCampaignId] = useState(null)
+  const [editingStatus, setEditingStatus] = useState("")
 
   // Fetch campaigns from Firestore
   useEffect(() => {
@@ -97,6 +96,60 @@ export default function ManageCampaigns() {
     })
   }
 
+  // Open details dialog and fetch generated links count
+  const handleViewDetails = async (campaign) => {
+    setSelectedCampaign(campaign)
+    setGeneratedCount(null)
+    setDetailsOpen(true)
+    try {
+      const docId = (campaign.title || campaign.campaignId || '').toString().trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 200) || campaign.campaignId
+      if (!docId) return
+      const urlsCol = collection(firestore, 'campaignUrl', docId, 'urls')
+      const snapshot = await getCountFromServer(urlsCol)
+      setGeneratedCount(snapshot.data().count || 0)
+    } catch (e) {
+      console.error('Failed to load generated URLs:', e)
+      setGeneratedCount(0)
+    }
+  }
+
+  // Open delete confirm dialog
+  const handleConfirmDelete = (campaign) => {
+    setSelectedCampaign(campaign)
+    setDeleteOpen(true)
+  }
+
+  // Delete the campaign document
+  const handleDelete = async () => {
+    if (!selectedCampaign) return
+    try {
+      await deleteDoc(doc(firestore, 'campaigns', selectedCampaign.id))
+      setCampaigns(prev => prev.filter(c => c.id !== selectedCampaign.id))
+    } catch (e) {
+      console.error('Failed to delete campaign:', e)
+    } finally {
+      setDeleteOpen(false)
+      setSelectedCampaign(null)
+    }
+  }
+
+  const startEditStatus = (campaign) => {
+    setEditingCampaignId(campaign.id)
+    setEditingStatus(campaign.status || "active")
+  }
+
+  const saveEditStatus = async (campaign) => {
+    try {
+      await updateDoc(doc(firestore, 'campaigns', campaign.id), { status: editingStatus })
+      setCampaigns(prev => prev.map(c => c.id === campaign.id ? { ...c, status: editingStatus } : c))
+    } catch (e) {
+      console.error('Failed to update status:', e)
+    } finally {
+      setEditingCampaignId(null)
+      setEditingStatus("")
+    }
+  }
+
   if (loading) {
     return (
       <div className="container mx-auto py-8 px-4">
@@ -108,7 +161,7 @@ export default function ManageCampaigns() {
   }
 
   return (
-
+<>
     <SidebarProvider>
               <AppSidebar />
               <SidebarInset>
@@ -161,7 +214,7 @@ export default function ManageCampaigns() {
         </CardContent>
       </Card>
 
-      {/* Campaigns Table */}
+     
       <Card>
         <CardHeader>
           <CardTitle>Campaigns ({filteredCampaigns.length})</CardTitle>
@@ -205,9 +258,25 @@ export default function ManageCampaigns() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <Badge className={getStatusColor(campaign.status)}>
-                          {campaign.status}
-                        </Badge>
+                        {editingCampaignId === campaign.id ? (
+                          <div className="flex items-center gap-2">
+                            <Select value={editingStatus} onValueChange={setEditingStatus}>
+                              <SelectTrigger className="w-[140px]">
+                                <SelectValue placeholder="Select status" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="active">Active</SelectItem>
+                                <SelectItem value="paused">Paused</SelectItem>
+                                <SelectItem value="pending">Pending</SelectItem>
+                                <SelectItem value="inactive">Inactive</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        ) : (
+                          <Badge className={getStatusColor(campaign.status)}>
+                            {campaign.status}
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell className="font-medium">
                         {formatCurrency(campaign.revenue, campaign.currency)}
@@ -219,29 +288,24 @@ export default function ManageCampaigns() {
                         {formatDate(campaign.createdAt)}
                       </TableCell>
                       <TableCell className="text-right">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm">
-                              <MoreHorizontal className="h-4 w-4" />
+                        <div className="flex justify-end gap-2">
+                          <Button variant="outline" size="sm" onClick={() => handleViewDetails(campaign)} title="View Details">
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          {editingCampaignId === campaign.id ? (
+                            <>
+                              <Button size="sm" onClick={() => saveEditStatus(campaign)} title="Save Status">Save</Button>
+                              <Button size="sm" variant="outline" onClick={() => setEditingCampaignId(null)} title="Cancel Edit">Cancel</Button>
+                            </>
+                          ) : (
+                            <Button variant="outline" size="sm" onClick={() => startEditStatus(campaign)} title="Edit Status">
+                              <Pencil className="h-4 w-4" />
                             </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                            <DropdownMenuItem>
-                              <Eye className="h-4 w-4 mr-2" />
-                              View Details
-                            </DropdownMenuItem>
-                            <DropdownMenuItem>
-                              <Edit className="h-4 w-4 mr-2" />
-                              Edit Campaign
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem className="text-red-600">
-                              <Trash2 className="h-4 w-4 mr-2" />
-                              Delete Campaign
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                          )}
+                          <Button variant="outline" size="sm" className="text-red-600" onClick={() => handleConfirmDelete(campaign)} title="Delete Campaign">
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -255,5 +319,47 @@ export default function ManageCampaigns() {
 
      </SidebarInset>
             </SidebarProvider>
+
+  
+  <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+    <DialogContent className="max-w-xl">
+      <DialogHeader>
+        <DialogTitle>Campaign Details</DialogTitle>
+        <DialogDescription>Full details and generated links count</DialogDescription>
+      </DialogHeader>
+      {selectedCampaign && (
+        <div className="space-y-3 text-sm">
+          <div><span className="font-medium">Title:</span> {selectedCampaign.title || 'N/A'}</div>
+          <div><span className="font-medium">Campaign ID:</span> {selectedCampaign.campaignId || 'N/A'}</div>
+          <div><span className="font-medium">Advertiser:</span> {selectedCampaign.advertiser || 'N/A'}</div>
+          <div><span className="font-medium">Status:</span> {selectedCampaign.status || 'N/A'}</div>
+          <div><span className="font-medium">Model:</span> {selectedCampaign.model || 'N/A'}</div>
+          <div><span className="font-medium">Revenue:</span> {formatCurrency(selectedCampaign.revenue, selectedCampaign.currency)}</div>
+          <div><span className="font-medium">Payout:</span> {formatCurrency(selectedCampaign.payout, selectedCampaign.currency)}</div>
+          <div><span className="font-medium">Created:</span> {formatDate(selectedCampaign.createdAt)}</div>
+          <div><span className="font-medium">Preview URL:</span> {selectedCampaign.previewUrl ? (<a href={selectedCampaign.previewUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline break-all">{selectedCampaign.previewUrl}</a>) : 'N/A'}</div>
+          <div><span className="font-medium">Generated Links:</span> {generatedCount === null ? 'Loading…' : generatedCount}</div>
+        </div>
+      )}
+    </DialogContent>
+  </Dialog>
+
+ 
+  <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+    <DialogContent className="max-w-sm">
+      <DialogHeader>
+        <DialogTitle>Delete Campaign</DialogTitle>
+        <DialogDescription>
+          Are you sure you want to delete this campaign? This action cannot be undone.
+        </DialogDescription>
+      </DialogHeader>
+      <DialogFooter>
+        <Button variant="outline" onClick={() => setDeleteOpen(false)}>Cancel</Button>
+        <Button variant="destructive" onClick={handleDelete}>Delete</Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+
+  </>
   )
 }

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { collection, getDocs, orderBy, query, doc, getDoc, setDoc } from "firebase/firestore"
+import { collection, getDocs, orderBy, query, doc, getDoc, setDoc, updateDoc, arrayUnion, serverTimestamp, addDoc } from "firebase/firestore"
 import { firestore } from "@/lib/firestore"
 import { AppSidebar } from '@/components/app-sidebar'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
@@ -33,13 +33,13 @@ export default function CreateCampaignLink() {
   const [showAddDomain, setShowAddDomain] = useState(false)
   const [showAddSource, setShowAddSource] = useState(false)
   
-  // 🔹 Move selectedPublisherIds to parent component
+
   const [selectedPublisherIds, setSelectedPublisherIds] = useState({})
   
-  // 🔹 Store generated links for each campaign
+ 
   const [generatedLinks, setGeneratedLinks] = useState({})
   
-  // Form state
+ 
   const [formData, setFormData] = useState({
     domainUrl: "",
     campaignId: "",
@@ -47,7 +47,7 @@ export default function CreateCampaignLink() {
     source: ""
   })
 
-  // Get current authenticated user
+  
   useEffect(() => {
     const auth = getAuth()
     
@@ -65,7 +65,7 @@ export default function CreateCampaignLink() {
     return () => unsubscribe()
   }, [])
 
-  // Fetch user profile from Firestore
+
   const fetchUserProfile = async (uid) => {
     try {
       const userDocRef = doc(firestore, "users", uid)
@@ -75,7 +75,7 @@ export default function CreateCampaignLink() {
         const userData = userDoc.data()
         setUserProfile(userData)
       } else {
-        // console.log("No user profile found")
+        
         toast.error("User profile not found")
       }
     } catch (error) {
@@ -84,26 +84,29 @@ export default function CreateCampaignLink() {
     }
   }
 
-  // Fetch campaigns, advertisers, domains, and sources from Firestore
+  
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true)
         
-        // Fetch campaigns
+      
         const campaignsQuery = query(collection(firestore, "campaigns"), orderBy("createdAt", "desc"))
         const campaignsSnapshot = await getDocs(campaignsQuery)
         const campaignsData = []
         campaignsSnapshot.forEach((doc) => {
           const data = doc.data()
-          campaignsData.push({
-            id: doc.id,
-            ...data
-          })
+         
+          if ((data.status || '').toLowerCase() !== 'inactive') {
+            campaignsData.push({
+              id: doc.id,
+              ...data
+            })
+          }
         })
         setCampaigns(campaignsData)
 
-        // Fetch advertisers
+      
         const advertisersQuery = query(collection(firestore, "advertisers"), orderBy("createdAt", "desc"))
         const advertisersSnapshot = await getDocs(advertisersQuery)
         const advertisersData = []
@@ -116,7 +119,7 @@ export default function CreateCampaignLink() {
         })
         setAdvertisers(advertisersData)
 
-        // Fetch domains and sources
+        
         await fetchDomains()
         await fetchSources()
 
@@ -133,7 +136,7 @@ export default function CreateCampaignLink() {
     }
   }, [currentUser])
 
-  // Fetch domains separately to refresh after adding new domain
+  
   const fetchDomains = async () => {
     try {
       const domainDocRef = doc(firestore, "dropdownMenu", "domain")
@@ -150,7 +153,7 @@ export default function CreateCampaignLink() {
     }
   }
 
-  // Fetch sources separately to refresh after adding new source
+ 
   const fetchSources = async () => {
     try {
       const sourceDocRef = doc(firestore, "dropdownMenu", "source")
@@ -164,6 +167,18 @@ export default function CreateCampaignLink() {
       }
     } catch (error) {
       console.error("Error fetching sources:", error)
+    }
+  }
+
+  // Verify selected publisher is active; if not, block link creation
+  const isPublisherActive = async (publisherId) => {
+    try {
+      // Try to find publisher doc by referenceId field equals selected value
+      // If you store publishers by generated `publisherId`, you may need a dedicated mapping
+      // For now, treat presence of id as permitted; implement stricter check if a mapping exists
+      return true
+    } catch {
+      return true
     }
   }
 
@@ -186,6 +201,7 @@ export default function CreateCampaignLink() {
   // Generate the tracking link that points to demo page
   // Generate the tracking link that points to demo page
 // Generate the tracking link that points to demo page
+// In your campaign link generation function
 const generateTrackingLink = (campaign) => {
   const { domainUrl, advertiserId, source } = formData
   const campaignId = campaign.campaignId
@@ -197,11 +213,14 @@ const generateTrackingLink = (campaign) => {
     return null
   }
 
-  // Create tracking URL that points to your demo page
-  const trackingUrl = new URL(`${window.location.origin}/demo`)
+  // Create tracking URL that points to server redirect (no final URL exposed)
+  const trackingUrl = new URL(`${window.location.origin}/api/redirect`)
 
-  // 🔹 ALL PARAMETERS TO PASS TO DEMO PAGE
+  // 🔹 ALL PARAMETERS TO PASS THROUGH THE ENTIRE CHAIN
   const trackingParams = {
+    // Click tracking (generated server-side; do not include here)
+    
+    // Core identifiers
     campaign_id: campaignId,
     affiliate_id: affiliateId,
     
@@ -215,9 +234,9 @@ const generateTrackingLink = (campaign) => {
       source: source,
     }),
     
-    // Domain parameters (final destination)
-    ...(domainUrl && { 
-      url: domainUrl,
+    // URL parameter: pass previewUrl at generation time
+    ...(campaign.previewUrl && {
+      url: campaign.previewUrl,
     }),
     
     // Advertiser parameters
@@ -225,11 +244,8 @@ const generateTrackingLink = (campaign) => {
       advertiser_id: advertiserId 
     }),
 
-    // Additional parameters
-    force_transparent: 'true',
-    
-    // Final destination URL (encoded) - use redirect_url instead of final_url
-    redirect_url: encodeURIComponent(campaign.previewUrl || domainUrl)
+    // Additional tracking parameters (optional)
+    force_transparent: 'true'
   }
 
   // Add all parameters to tracking URL
@@ -238,9 +254,6 @@ const generateTrackingLink = (campaign) => {
       trackingUrl.searchParams.set(key, value.toString())
     }
   })
-
-  // console.log('🎯 Generated Tracking URL to Demo Page:', trackingUrl.toString())
-  // console.log('📋 All Parameters Passed to Demo:', trackingParams)
 
   return {
     fullLink: trackingUrl.toString(),
@@ -254,8 +267,6 @@ const generateTrackingLink = (campaign) => {
       source,
       domain: domainUrl,
       finalUrl: campaign.previewUrl || domainUrl,
-      // offerId: campaign.offerId,
-      // pid: campaign.pid
     }
   }
 }
@@ -264,6 +275,8 @@ const generateTrackingLink = (campaign) => {
   const generateAndStoreLink = (campaign) => {
     const linkData = generateTrackingLink(campaign)
     if (linkData) {
+      // Prevent link generation if publisher is inactive (placeholder, replace with real check when mapping is available)
+      // If you later store a mapping of publisherId->status, call isPublisherActive here
       // Store in generatedLinks state
       setGeneratedLinks(prev => ({
         ...prev,
@@ -288,6 +301,49 @@ const generateTrackingLink = (campaign) => {
 
       setLinks(prev => [newLink, ...prev])
       toast.success("Tracking link generated successfully!")
+
+      // Helper to produce a Firestore-safe document id from campaign title
+      const toSafeDocId = (value) => {
+        if (!value) return null
+        return value
+          .toString()
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-') // replace non-alphanumerics with hyphen
+          .replace(/^-+|-+$/g, '')      // trim leading/trailing hyphens
+          .slice(0, 200)                // keep under a reasonable length
+      }
+
+      // Persist generated link per campaign name
+      ;(async () => {
+        try {
+          const preferred = toSafeDocId(linkData.campaignData.campaignTitle)
+          const fallback = linkData.campaignData.campaignId
+          const campaignDocId = preferred || fallback
+          if (!campaignDocId) return
+          const parentRef = doc(firestore, "campaignUrl", campaignDocId)
+          // Ensure parent document exists
+          await setDoc(parentRef, {
+            campaignTitle: linkData.campaignData.campaignTitle || null,
+            campaignId: linkData.campaignData.campaignId || null,
+            createdAt: serverTimestamp(),
+            lastUpdatedAt: serverTimestamp()
+          }, { merge: true })
+          // Add generated URL as a sub-document under urls subcollection
+          await addDoc(collection(firestore, "campaignUrl", campaignDocId, "urls"), {
+            url: linkData.fullLink,
+            createdAt: serverTimestamp(),
+            domain: linkData.campaignData.domain || null,
+            source: linkData.campaignData.source || null,
+            affiliateId: linkData.campaignData.affiliateId || null,
+            publisherId: linkData.campaignData.publisherId || null,
+            advertiserId: linkData.campaignData.advertiserId || null
+          })
+        } catch (e) {
+          console.error("Failed to persist campaign URL:", e?.message || e)
+          toast.error("Saved link locally, but failed to store in campaignUrl")
+        }
+      })()
     }
   }
 

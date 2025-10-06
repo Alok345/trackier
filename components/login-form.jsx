@@ -23,17 +23,16 @@ export function LoginForm({ className, ...props }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
 
-  // 🔑 Auto redirect check
+  // 🔑 Auto redirect check (client-side only: if already logged in, go to dashboard)
   useEffect(() => {
-    const userType = localStorage.getItem("userType")
-    const name = localStorage.getItem("name")
-    const email = localStorage.getItem("email")
-
-    if (userType && name && email) {
-      router.replace("/dashboard") // already logged in
-    } else {
-      router.replace("/login") // force login if missing
-    }
+    try {
+      const userType = localStorage.getItem("userType")
+      const name = localStorage.getItem("name")
+      const emailSaved = localStorage.getItem("email")
+      if (userType && name && emailSaved) {
+        router.replace("/dashboard")
+      }
+    } catch {}
   }, [router])
 
   const handleLogin = async (e) => {

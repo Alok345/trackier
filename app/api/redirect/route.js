@@ -1,321 +1,434 @@
-import { firestore } from "@/lib/firestore"
-import { doc, getDoc, setDoc, updateDoc, arrayUnion } from "firebase/firestore"
+import { firestore } from "@/lib/firestore";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  arrayUnion,
+  serverTimestamp,
+  collection,
+  query,
+  where,
+  getDocs,
+  orderBy,
+  limit,
+} from "firebase/firestore";
+import { generateClickId } from "@/lib/affiliateUtils";
 
 export async function GET(req) {
-  const url = new URL(req.url)
-  const sp = url.searchParams
+  const url = new URL(req.url);
+  const sp = url.searchParams;
 
-  // Helper: decode nested URIs up to 3 times (handles double-encoded final_url)
-  const decodeNestedURI = (value) => {
-    if (!value) return value
-    let out = value
-    for (let i = 0; i < 3; i++) {
-      try {
-        const dec = decodeURIComponent(out)
-        if (dec === out) break
-        out = dec
-      } catch {
-        break
-      }
-    }
-    return out
-  }
+  // Optional identifiers coming from the generated link (no final URL or click_id required)
+  const campaignIdParam = sp.get("campaign_id");
+  const affiliateIdParam = sp.get("affiliate_id");
+  const publisherIdParam = sp.get("pub_id") || sp.get("publisher_id");
+  const sourceParam = sp.get("source");
+  const domainParam = sp.get("domain") || sp.get("url");
+  const advertiserIdParam = sp.get("advertiser_id");
+  const maybeRedirectUrl = sp.get("redirect_url");
 
-  // Helper: merge params with click_id as first parameter
-  const mergeParamsIntoUrl = (targetUrlString, paramsObj, clickId) => {
-    if (!targetUrlString) return targetUrlString
-    let target
+  // Resolve the preview URL without exposing it in the generated link
+  // Priority:
+  // 1) If redirect_url is provided, use it (backward-compat),
+  // 2) Else try to fetch by campaign_id from Firestore collection "campaigns/{campaign_id}" (doc id),
+  //    if not found, query campaigns where field campaignId == campaign_id,
+  // 3) Else fail with 400.
+  let previewUrl = null;
+  let resolvedFrom = "";
+
+  if (maybeRedirectUrl) {
+    previewUrl = decodeURIComponent(maybeRedirectUrl);
+    resolvedFrom = "query_param";
+  } else if (campaignIdParam) {
     try {
-      target = new URL(targetUrlString)
-    } catch {
-      // Attempt to coerce if missing protocol
-      try {
-        target = new URL(`https://${targetUrlString}`)
-      } catch {
-        return targetUrlString
-      }
-    }
-
-    // First, ensure click_id is the first parameter
-    if (clickId) {
-      // Remove existing click_id if any
-      target.searchParams.delete('click_id')
-      // Add click_id as first parameter by reconstructing the URL
-      const newSearchParams = new URLSearchParams()
-      newSearchParams.append('click_id', clickId)
-      
-      // Then add all other parameters
-      for (const [k, v] of Object.entries(paramsObj)) {
-        if (k == null || k === "" || v == null || k === 'click_id') continue
-        newSearchParams.append(k, String(v))
-      }
-      
-      // Also include any existing parameters from the target URL (except click_id)
-      for (const [k, v] of target.searchParams.entries()) {
-        if (k !== 'click_id') {
-          newSearchParams.append(k, v)
+      // First try campaigns/{campaign_id} by document id
+      const campaignDocRef = doc(firestore, "campaigns", campaignIdParam);
+      const campaignDocSnap = await getDoc(campaignDocRef);
+      if (campaignDocSnap.exists()) {
+        const campaignData = campaignDocSnap.data();
+        previewUrl = campaignData.previewUrl || null;
+        resolvedFrom = "campaigns_docId";
+      } else {
+        // Fallback: query campaigns where field campaignId == campaign_id
+        const q = query(
+          collection(firestore, "campaigns"),
+          where("campaignId", "==", campaignIdParam)
+        );
+        const qs = await getDocs(q);
+        if (!qs.empty) {
+          const matched = qs.docs[0].data();
+          previewUrl = matched.previewUrl || null;
+          resolvedFrom = "campaigns_field_campaignId";
         }
       }
-      
-      target.search = newSearchParams.toString()
-    } else {
-      // If no click_id, use normal merging
-      for (const [k, v] of Object.entries(paramsObj)) {
-        if (k == null || k === "" || v == null) continue
-        if (!target.searchParams.has(k)) {
-          target.searchParams.append(k, String(v))
-        }
-      }
+    } catch (e) {
+      console.error("[API] Failed to load campaignLinks doc:", e);
     }
-    
-    return target.toString()
   }
 
-  // Get the click_id from the request (passed from demo page as first parameter)
-  const clickId = sp.get("click_id")
-  const redirectUrl = sp.get("redirect_url")
-  const returnJson = sp.get("return_json") === "true" // New parameter to control response type
-  
-  if (!redirectUrl) {
-    return new Response(JSON.stringify({ error: "Missing redirect_url parameter" }), {
+  if (!previewUrl) {
+    return new Response(JSON.stringify({ error: "Preview URL not found" }), {
       status: 400,
       headers: { "content-type": "application/json" },
-    })
+    });
   }
 
-  // Decode nested encoding on redirect_url
-  const decodedRedirectUrl = decodeNestedURI(redirectUrl)
+  // Gather client info
+  let ip = req.headers.get("x-forwarded-for") || "unknown";
+  if (ip.includes(",")) ip = ip.split(",")[0].trim();
+  const userAgent = req.headers.get("user-agent") || "unknown";
+  const host = req.headers.get("host") || "";
+  const serverResolvedAt = new Date().toISOString();
 
-  // Build a params object from the current query string
-  const allParams = Object.fromEntries(sp.entries())
-  
-  // Remove parameters that shouldn't be passed to final URL
-  const paramsToRemove = ['redirect_url', 'preview_url', 'return_json']
-  paramsToRemove.forEach(param => delete allParams[param])
-
-  // Start by merging into the OUTER affiliate URL WITH CLICK_ID AS FIRST PARAMETER
-  let composedFinal = mergeParamsIntoUrl(decodedRedirectUrl, allParams, clickId)
-
-  // Now detect common nested URL parameter names and append the same params to them too
-  const nestedKeys = ["lpurl", "url", "u", "redirect", "redir", "target", "dest", "destination", "to", "r"]
+  // Try to reuse existing clickId for same affiliate+campaign+IP (within 24h), else generate
+  let clickId = null;
+  // 1) Check cookie
   try {
-    const outerURL = new URL(composedFinal)
-    for (const key of nestedKeys) {
-      if (!outerURL.searchParams.has(key)) continue
-      const nestedRaw = outerURL.searchParams.get(key)
-      const nestedDecoded = decodeNestedURI(nestedRaw)
-      // Only attempt if the nested raw looks like a URL
-      if (nestedDecoded && /^https?:\/\//i.test(nestedDecoded)) {
-        // Ensure click_id is first parameter in nested URLs too
-        const mergedNested = mergeParamsIntoUrl(nestedDecoded, allParams, clickId)
-        // Setting directly will auto-encode the nested URL as needed
-        outerURL.searchParams.set(key, mergedNested)
+    const cookieHeader = req.headers.get("cookie") || "";
+    const cookieKey = `click_session_${affiliateIdParam || ""}_${
+      campaignIdParam || ""
+    }_${ip}`;
+    const match = cookieHeader
+      .split(";")
+      .map((s) => s.trim())
+      .find((c) => c.startsWith(`${cookieKey}=`));
+    if (match) {
+      const value = decodeURIComponent(match.split("=")[1] || "");
+      const parsed = JSON.parse(value);
+      if (parsed && parsed.clickId) {
+        const within24h =
+          Date.now() - (parsed.lastClick || 0) < 24 * 60 * 60 * 1000;
+        if (within24h) {
+          clickId = parsed.clickId;
+        }
       }
     }
-    composedFinal = outerURL.toString()
-  } catch {
-    // If parsing fails, we still try to redirect to composedFinal as-is
+  } catch (e) {
+    // noop
+  }
+  try {
+    if (affiliateIdParam && campaignIdParam && ip && ip !== "unknown") {
+      const sessionsRef = collection(firestore, "trackingSessions");
+      const q = query(
+        sessionsRef,
+        where("affiliateId", "==", affiliateIdParam),
+        where("campaignId", "==", campaignIdParam),
+        where("ipAddress", "==", ip),
+        orderBy("lastUpdatedAt", "desc"),
+        limit(1)
+      );
+      const qs = await getDocs(q);
+      if (!qs.empty) {
+        const existing = qs.docs[0].data();
+        // Optional: time-window check (24h)
+        const lastUpdatedAt = new Date(
+          existing.lastUpdatedAt || existing.createdAt || 0
+        );
+        const within24h =
+          Date.now() - lastUpdatedAt.getTime() < 24 * 60 * 60 * 1000;
+        if (within24h && existing.clickId) {
+          clickId = existing.clickId;
+        }
+      }
+    }
+  } catch (e) {
+    console.error("[API] Failed session reuse lookup:", e);
+  }
+  if (!clickId) {
+    clickId = generateClickId();
   }
 
-  // Issue a server-side redirect (302) to the fully composed URL
-  let finalRedirect = composedFinal
   try {
-    const outerURL = new URL(composedFinal)
-    const nestedKeys = [
-      "lpurl",
-      "url",
-      "u",
-      "redirect",
-      "redir",
-      "target",
-      "dest",
-      "destination",
-      "to",
-      "r",
-      "landing",
-      "landing_url",
-      "merchant_url",
-    ]
-    const hasNested = nestedKeys.some((k) => outerURL.searchParams.has(k))
+    // Build affiliateLinks record for this click
+    const affiliateLinkRef = doc(firestore, "affiliateLinks", clickId);
+    const affiliateLinkData = {
+      clickId,
+      previewUrl,
+      campaignId: campaignIdParam || null,
+      affiliateId: affiliateIdParam || null,
+      publisherId: publisherIdParam || null,
+      advertiserId: advertiserIdParam || null,
+      source: sourceParam || null,
+      domainUrl: domainParam || null,
+      trackingDomain: host || null,
+      status: "generated",
+      resolvedFrom,
+      ipAddress: ip,
+      userAgent,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    await setDoc(affiliateLinkRef, affiliateLinkData);
 
-    // If we find a real merchant URL, append the same params there.
-    let merchantResolved = await resolveMerchantByFollow(composedFinal)
-
-    if (!merchantResolved && !hasNested) {
-      merchantResolved = await resolveMerchantFromAffiliate(composedFinal)
-    }
-
-    if (merchantResolved && /^https?:\/\//i.test(merchantResolved)) {
-      // Ensure click_id is first parameter in merchant URL too
-      finalRedirect = mergeParamsIntoUrl(merchantResolved, allParams, clickId)
-      try {
-        fetch(composedFinal).catch(() => {})
-      } catch {}
-    }
-  } catch {
-    // If parsing fails, we still try to redirect to composedFinal as-is
-  }
-
-  // After computing finalRedirect, persist data into Firestore
-  try {
-    const affiliateId = sp.get("affiliate_id") || null
-    const campaignId = sp.get("campaign_id") || null
-    const publisherId = sp.get("pub_id") || sp.get("publisher_id") || null
-    const source = sp.get("source") || sp.get("utm_source") || null
-
-    const previewUrl = sp.get("preview_url") || url.toString()
-    const outerAffiliateUrl = decodedRedirectUrl
-    const composedAffiliateUrl = composedFinal
-    const resolvedFinalUrl = finalRedirect
-    const serverResolvedAt = new Date().toISOString()
-    const requestIp = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || null
-    const userAgent = req.headers.get("user-agent") || null
-
-    // Update per-click session with additional API data
-    if (clickId) {
-      const sessionRef = doc(firestore, "trackingSessions", clickId)
-      const sessionDoc = await getDoc(sessionRef)
-      
-      const sessionData = {
-        clickId,
-        affiliateId,
-        campaignId,
-        publisherId,
-        source,
-        previewUrl,
-        outerAffiliateUrl,
-        composedAffiliateUrl,
-        finalUrl: resolvedFinalUrl,
-        serverResolvedAt,
-        requestIp,
-        userAgent,
-        lastUpdatedAt: serverResolvedAt,
-      }
-
-      // If session exists, update it; otherwise create new
-      if (sessionDoc.exists()) {
-        await updateDoc(sessionRef, {
-          ...sessionData,
-          apiCalls: arrayUnion({
-            timestamp: serverResolvedAt,
-            finalUrl: resolvedFinalUrl
-          })
-        })
-      } else {
-        await setDoc(sessionRef, {
-          ...sessionData,
-          apiCalls: [{
-            timestamp: serverResolvedAt,
-            finalUrl: resolvedFinalUrl
-          }],
-          createdAt: serverResolvedAt
-        })
-      }
-    }
-
-    // Update affiliate aggregate using affiliate_id as document ID
-    if (affiliateId && clickId) {
-      const affiliateRef = doc(firestore, "affiliateLinks", affiliateId)
-      const snap = await getDoc(affiliateRef)
-      const logEntry = {
-        clickId,
-        campaignId,
-        publisherId,
-        source,
-        previewUrl,
-        outerAffiliateUrl,
-        composedAffiliateUrl,
-        finalUrl: resolvedFinalUrl,
-        serverResolvedAt,
-        isRepeatClick: sp.get("is_repeat_click") === "true"
-      }
-
-      if (snap.exists()) {
-        await updateDoc(affiliateRef, {
-          trackingLogs: arrayUnion(logEntry),
-          lastPreviewUrl: previewUrl,
-          lastFinalUrl: resolvedFinalUrl,
+    // Maintain per-affiliate document for aggregation
+    if (affiliateIdParam) {
+      const perAffiliateRef = doc(
+        firestore,
+        "affiliateClicks",
+        affiliateIdParam
+      );
+      const perAffiliateSnap = await getDoc(perAffiliateRef);
+     const clickEntry = {
+  clickId,
+  campaignId: campaignIdParam || null,
+  publisherId: publisherIdParam || null,
+  source: sourceParam || null,
+  advertiserId: advertiserIdParam || null,
+  ipAddress: ip,
+  userAgent,
+  previewUrl: finalUrlString, // ← CHANGED: Use the final URL instead of original
+  timestamp: serverResolvedAt,
+};
+      if (perAffiliateSnap.exists()) {
+        await updateDoc(perAffiliateRef, {
+          clicks: arrayUnion(clickEntry),
           lastActivity: serverResolvedAt,
-          totalClicks: (snap.data().totalClicks || 0) + (logEntry.isRepeatClick ? 0 : 1),
-        })
+        });
       } else {
-        await setDoc(affiliateRef, {
-          affiliateId,
-          totalClicks: 1,
+        await setDoc(perAffiliateRef, {
+          affiliateId: affiliateIdParam,
+          clicks: [clickEntry],
           createdAt: serverResolvedAt,
           lastActivity: serverResolvedAt,
-          lastPreviewUrl: previewUrl,
-          lastFinalUrl: resolvedFinalUrl,
-          trackingLogs: [logEntry],
-        })
+        });
       }
     }
+
+    // Also write a lightweight session log
+    const sessionRef = doc(firestore, "trackingSessions", clickId);
+    const sessionDoc = await getDoc(sessionRef);
+    const sessionEntry = {
+      timestamp: serverResolvedAt,
+      type: "preview_redirect",
+      url: previewUrl,
+    };
+    if (sessionDoc.exists()) {
+      await updateDoc(sessionRef, {
+        clickId,
+        campaignId: campaignIdParam || null,
+        affiliateId: affiliateIdParam || null,
+        ipAddress: ip,
+        previewUrl,
+        lastUpdatedAt: serverResolvedAt,
+        apiCalls: arrayUnion(sessionEntry),
+      });
+    } else {
+      await setDoc(sessionRef, {
+        clickId,
+        campaignId: campaignIdParam || null,
+        affiliateId: affiliateIdParam || null,
+        ipAddress: ip,
+        previewUrl,
+        apiCalls: [sessionEntry],
+        createdAt: serverResolvedAt,
+        lastUpdatedAt: serverResolvedAt,
+      });
+    }
   } catch (e) {
-    // Best-effort logging; never block redirect
-    console.error("[API] Firestore logging failed:", e)
+    console.error("[API] Firestore logging failed:", e);
   }
 
-  // Return JSON instead of redirecting if requested
-  if (returnJson) {
-    return new Response(JSON.stringify({ 
-      success: true,
-      previewUrl: decodedRedirectUrl,
-      finalRedirectUrl: finalRedirect,
-      clickId: clickId,
-      timestamp: new Date().toISOString()
-    }), {
-      status: 200,
-      headers: { 
-        "content-type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type"
-      },
-    })
+  // Append database parameters to preview URL before redirect
+ try {
+  const finalPreview = new URL(previewUrl);
+  // Remove duplicate/undesired params if present from incoming URL
+  finalPreview.searchParams.delete("force_transparent");
+  // Do NOT include click_id at top level; use ref_id as clickRef instead
+  finalPreview.searchParams.delete("click_id");
+  if (campaignIdParam)
+    finalPreview.searchParams.set("campaign_id", campaignIdParam);
+  if (affiliateIdParam)
+    finalPreview.searchParams.set("affiliate_id", affiliateIdParam);
+  if (publisherIdParam)
+    finalPreview.searchParams.set("pub_id", publisherIdParam);
+  if (sourceParam) finalPreview.searchParams.set("source", sourceParam);
+  if (advertiserIdParam)
+    finalPreview.searchParams.set("advertiser_id", advertiserIdParam);
+  // Optional: include tracking domain
+  if (host) finalPreview.searchParams.set("tracking_domain", host);
+
+  // Replace placeholder tokens with runtime clickId
+  // Example: ref_id={gclid} -> ref_id=clickId
+  const refId = finalPreview.searchParams.get("ref_id");
+  if (clickId) {
+    const newRef = (refId || "{gclid}")
+      .replace("{gclid}", clickId)
+      .replace("{gclikcID}", clickId)
+      .replace("{gclickid}", clickId);
+    finalPreview.searchParams.set("ref_id", newRef);
   }
 
-  // Default behavior: redirect immediately
-  return Response.redirect(finalRedirect, 302)
-}
-
-async function resolveMerchantFromAffiliate(affiliateUrl) {
-  // Try up to 3 manual redirects to discover final Location without following it
-  let current = affiliateUrl
-  for (let i = 0; i < 3; i++) {
+  // ✅ CRITICAL: Replace camref value in redirection_url parameter
+  const redirectionRaw = finalPreview.searchParams.get("redirection_url");
+  if (redirectionRaw && clickId) {
     try {
-      const res = await fetch(current, { method: "GET", redirect: "manual" })
-      const location = res.headers.get("location")
-      // If no Location or status isn't a redirect, stop
-      if (!location || res.status < 300 || res.status > 399) break
-      // Resolve relative locations against current
-      const nextUrl = new URL(location, current).toString()
-      // If the location looks like a merchant URL, return it; otherwise keep chasing
-      if (/^https?:\/\//i.test(nextUrl)) {
-        current = nextUrl
-        // Continue the loop to see if there are deeper redirects, but remember this as the latest
-        continue
-      } else {
-        break
-      }
-    } catch {
-      break
+      console.log('[API] Original redirection_url:', redirectionRaw);
+      
+      // Decode the redirection_url (it's URL encoded)
+      let decoded = decodeURIComponent(redirectionRaw);
+      
+      // Replace camref:1101l3MtY4 with camref:clickId
+      const replaced = decoded.replace(/camref:([A-Za-z0-9]+)/g, `camref:${clickId}`);
+      
+      console.log('[API] Modified redirection_url:', replaced);
+      
+      // Re-encode and set back
+      finalPreview.searchParams.set("redirection_url", encodeURIComponent(replaced));
+    } catch (e) {
+      console.error("[API] Failed to replace camref in redirection_url:", e);
     }
   }
-  return current === affiliateUrl ? null : current
-}
 
-async function resolveMerchantByFollow(affiliateUrl) {
-  try {
-    // Try to fully follow the chain and rely on Response.url to expose the final URL.
-    // Avoid reading the body to minimize overhead.
-    const res = await fetch(affiliateUrl, { method: "GET", redirect: "follow" })
-    // If fetch succeeded, res.url should be the final landing URL after redirects.
-    // Some networks may still mask this, but this works in many cases.
-    if (res && typeof res.url === "string" && res.url.startsWith("http")) {
-      return res.url
+    // Persist the fully-parameterized preview URL back to Firestore
+    const finalUrlString = finalPreview.toString();
+    try {
+      // Update affiliateLinks doc with final URL
+      await updateDoc(doc(firestore, "affiliateLinks", clickId), {
+        finalPreviewUrl: finalUrlString,
+        updatedAt: serverTimestamp(),
+      });
+
+      // Upsert in affiliateClicks: store the finalized URL on the latest entry
+      if (affiliateIdParam) {
+        const perAffiliateRef = doc(
+          firestore,
+          "affiliateClicks",
+          affiliateIdParam
+        );
+
+        const perAffiliateSnap = await getDoc(perAffiliateRef);
+        const clickEntry = {
+          clickId,
+          campaignId: campaignIdParam || null,
+          publisherId: publisherIdParam || null,
+          source: sourceParam || null,
+          advertiserId: advertiserIdParam || null,
+          ipAddress: ip,
+          userAgent,
+          previewUrl: finalUrlString,
+          timestamp: serverResolvedAt,
+        };
+        if (perAffiliateSnap.exists()) {
+          await updateDoc(perAffiliateRef, {
+            clicks: arrayUnion(clickEntry),
+            lastActivity: serverResolvedAt,
+          });
+        } else {
+          await setDoc(perAffiliateRef, {
+            affiliateId: affiliateIdParam,
+            clicks: [clickEntry],
+            createdAt: serverResolvedAt,
+            lastActivity: serverResolvedAt,
+          });
+        }
+      }
+
+      // Update session log latest URL
+      await updateDoc(doc(firestore, "trackingSessions", clickId), {
+        previewUrl: finalUrlString,
+        lastUpdatedAt: serverResolvedAt,
+        apiCalls: arrayUnion({
+          timestamp: serverResolvedAt,
+          type: "final_preview",
+          url: finalUrlString,
+        }),
+      });
+    } catch (persistErr) {
+      console.error("[API] Failed to persist final URL:", persistErr);
     }
+
+    // Prepare cookie to help reuse on subsequent calls (24h)
+    try {
+      const cookieKey = `click_session_${affiliateIdParam || ""}_${
+        campaignIdParam || ""
+      }_${ip}`;
+      const cookieVal = encodeURIComponent(
+        JSON.stringify({ clickId, lastClick: Date.now() })
+      );
+      const cookie = `${cookieKey}=${cookieVal}; Max-Age=${
+        24 * 60 * 60
+      }; Path=/; SameSite=Lax`;
+      const headers = new Headers({
+        Location: finalUrlString,
+        "Set-Cookie": cookie,
+      });
+
+      // Optional debug flag: logs in browser console before redirecting
+      const debug = sp.get("debug");
+      if (debug === "1" || debug === "true") {
+        const payload = {
+          previewUrl: finalUrlString,
+          params: {
+            click_id: clickId,
+            campaign_id: campaignIdParam || null,
+            affiliate_id: affiliateIdParam || null,
+            pub_id: publisherIdParam || null,
+            source: sourceParam || null,
+            advertiser_id: advertiserIdParam || null,
+            tracking_domain: host || null,
+            ip: ip || null,
+          },
+          resolvedFrom,
+        };
+        const html = `<!doctype html><html><head><meta charset="utf-8"><title>Redirecting...</title></head><body><script>
+          (function(){
+            const data = ${JSON.stringify(payload)};
+            console.log('Preview URL with DB params:', data.previewUrl);
+            console.log('Params:', data.params);
+            console.log('Resolved From:', data.resolvedFrom);
+            setTimeout(function(){ window.location.href = data.previewUrl; }, 100);
+          })();
+        </script>
+        <noscript>
+          JavaScript is required. Continue to <a href="${finalUrlString}">destination</a>.
+        </noscript></body></html>`;
+        return new Response(html, { status: 200, headers });
+      }
+
+      return new Response(null, { status: 302, headers });
+    } catch {
+      // fallback normal redirect
+    }
+
+    // Optional debug flag: logs in browser console before redirecting
+    const debug = sp.get("debug");
+    if (debug === "1" || debug === "true") {
+      const payload = {
+        previewUrl: finalPreview.toString(),
+        params: {
+          click_id: clickId,
+          campaign_id: campaignIdParam || null,
+          affiliate_id: affiliateIdParam || null,
+          pub_id: publisherIdParam || null,
+          source: sourceParam || null,
+          advertiser_id: advertiserIdParam || null,
+          tracking_domain: host || null,
+          ip: ip || null,
+        },
+        resolvedFrom,
+      };
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>Redirecting...</title></head><body><script>
+        (function(){
+          const data = ${JSON.stringify(payload)};
+          console.log('Preview URL with DB params:', data.previewUrl);
+          console.log('Params:', data.params);
+          console.log('Resolved From:', data.resolvedFrom);
+          setTimeout(function(){ window.location.href = data.previewUrl; }, 100);
+        })();
+      </script>
+      <noscript>
+        JavaScript is required. Continue to <a href="${finalPreview.toString()}">destination</a>.
+      </noscript></body></html>`;
+      return new Response(html, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
+
+    return Response.redirect(finalUrlString, 302);
   } catch (e) {
-    // Swallow errors; we'll fallback below.
+    console.error("[API] Failed to build final preview URL, falling back:", e);
+    return Response.redirect(previewUrl, 302);
   }
-  return null
 }
