@@ -107,6 +107,8 @@ export async function GET(req) {
   } catch (e) {
     // noop
   }
+  
+  // 2) Check Firestore for existing session
   try {
     if (affiliateIdParam && campaignIdParam && ip && ip !== "unknown") {
       const sessionsRef = collection(firestore, "trackingSessions");
@@ -135,16 +137,78 @@ export async function GET(req) {
   } catch (e) {
     console.error("[API] Failed session reuse lookup:", e);
   }
+  
   if (!clickId) {
     clickId = generateClickId();
   }
 
+  // Build the final URL with all parameter replacements FIRST
+  let finalUrlString = previewUrl;
+  try {
+    const finalPreview = new URL(previewUrl);
+    // Remove duplicate/undesired params if present from incoming URL
+    finalPreview.searchParams.delete("force_transparent");
+    // Do NOT include click_id at top level; use ref_id as clickRef instead
+    finalPreview.searchParams.delete("click_id");
+    if (campaignIdParam)
+      finalPreview.searchParams.set("campaign_id", campaignIdParam);
+    if (affiliateIdParam)
+      finalPreview.searchParams.set("affiliate_id", affiliateIdParam);
+    if (publisherIdParam)
+      finalPreview.searchParams.set("pub_id", publisherIdParam);
+    if (sourceParam) finalPreview.searchParams.set("source", sourceParam);
+    if (advertiserIdParam)
+      finalPreview.searchParams.set("advertiser_id", advertiserIdParam);
+    // Optional: include tracking domain
+    if (host) finalPreview.searchParams.set("tracking_domain", host);
+
+    // Replace placeholder tokens with runtime clickId
+    // Example: ref_id={gclid} -> ref_id=clickId
+    const refId = finalPreview.searchParams.get("ref_id");
+    if (clickId) {
+      const newRef = (refId || "{gclid}")
+        .replace("{gclid}", clickId)
+        .replace("{gclikcID}", clickId)
+        .replace("{gclickid}", clickId);
+      finalPreview.searchParams.set("ref_id", newRef);
+    }
+
+    // ✅ CRITICAL: Replace camref value in redirection_url parameter
+    const redirectionRaw = finalPreview.searchParams.get("redirection_url");
+    if (redirectionRaw && clickId) {
+      try {
+        console.log('[API] Original redirection_url:', redirectionRaw);
+        
+        // Decode the redirection_url (it's URL encoded)
+        let decoded = decodeURIComponent(redirectionRaw);
+        
+        // Replace camref:1101l3MtY4 with camref:clickId
+        const replaced = decoded.replace(/camref:([A-Za-z0-9]+)/g, `camref:${clickId}`);
+        
+        console.log('[API] Modified redirection_url:', replaced);
+        
+        // Re-encode and set back
+        finalPreview.searchParams.set("redirection_url", encodeURIComponent(replaced));
+      } catch (e) {
+        console.error("[API] Failed to replace camref in redirection_url:", e);
+      }
+    }
+
+    finalUrlString = finalPreview.toString();
+    console.log('[API] Final URL constructed:', finalUrlString);
+  } catch (e) {
+    console.error("[API] Failed to build final preview URL:", e);
+    // Fallback to original previewUrl
+    finalUrlString = previewUrl;
+  }
+
+  // Save all data to Firestore with the FINAL URL
   try {
     // Build affiliateLinks record for this click
     const affiliateLinkRef = doc(firestore, "affiliateLinks", clickId);
     const affiliateLinkData = {
       clickId,
-      previewUrl,
+      previewUrl: finalUrlString, // ✅ Use final URL
       campaignId: campaignIdParam || null,
       affiliateId: affiliateIdParam || null,
       publisherId: publisherIdParam || null,
@@ -169,17 +233,20 @@ export async function GET(req) {
         affiliateIdParam
       );
       const perAffiliateSnap = await getDoc(perAffiliateRef);
-     const clickEntry = {
-  clickId,
-  campaignId: campaignIdParam || null,
-  publisherId: publisherIdParam || null,
-  source: sourceParam || null,
-  advertiserId: advertiserIdParam || null,
-  ipAddress: ip,
-  userAgent,
-  previewUrl: finalUrlString, // ← CHANGED: Use the final URL instead of original
-  timestamp: serverResolvedAt,
-};
+      
+      // ✅ FIX: Use finalUrlString instead of original previewUrl
+      const clickEntry = {
+        clickId,
+        campaignId: campaignIdParam || null,
+        publisherId: publisherIdParam || null,
+        source: sourceParam || null,
+        advertiserId: advertiserIdParam || null,
+        ipAddress: ip,
+        userAgent,
+        previewUrl: finalUrlString, // ✅ KEY FIX: Use the final modified URL
+        timestamp: serverResolvedAt,
+      };
+      
       if (perAffiliateSnap.exists()) {
         await updateDoc(perAffiliateRef, {
           clicks: arrayUnion(clickEntry),
@@ -198,18 +265,21 @@ export async function GET(req) {
     // Also write a lightweight session log
     const sessionRef = doc(firestore, "trackingSessions", clickId);
     const sessionDoc = await getDoc(sessionRef);
+    
+    // ✅ FIX: Use finalUrlString here too
     const sessionEntry = {
       timestamp: serverResolvedAt,
       type: "preview_redirect",
-      url: previewUrl,
+      url: finalUrlString, // ✅ Use final URL
     };
+    
     if (sessionDoc.exists()) {
       await updateDoc(sessionRef, {
         clickId,
         campaignId: campaignIdParam || null,
         affiliateId: affiliateIdParam || null,
         ipAddress: ip,
-        previewUrl,
+        previewUrl: finalUrlString, // ✅ Use final URL
         lastUpdatedAt: serverResolvedAt,
         apiCalls: arrayUnion(sessionEntry),
       });
@@ -219,183 +289,45 @@ export async function GET(req) {
         campaignId: campaignIdParam || null,
         affiliateId: affiliateIdParam || null,
         ipAddress: ip,
-        previewUrl,
+        previewUrl: finalUrlString, // ✅ Use final URL
         apiCalls: [sessionEntry],
         createdAt: serverResolvedAt,
         lastUpdatedAt: serverResolvedAt,
       });
     }
+
+    // Update affiliateLinks doc with final URL (additional persistence)
+    await updateDoc(doc(firestore, "affiliateLinks", clickId), {
+      finalPreviewUrl: finalUrlString,
+      updatedAt: serverTimestamp(),
+    });
+
   } catch (e) {
     console.error("[API] Firestore logging failed:", e);
   }
 
-  // Append database parameters to preview URL before redirect
- try {
-  const finalPreview = new URL(previewUrl);
-  // Remove duplicate/undesired params if present from incoming URL
-  finalPreview.searchParams.delete("force_transparent");
-  // Do NOT include click_id at top level; use ref_id as clickRef instead
-  finalPreview.searchParams.delete("click_id");
-  if (campaignIdParam)
-    finalPreview.searchParams.set("campaign_id", campaignIdParam);
-  if (affiliateIdParam)
-    finalPreview.searchParams.set("affiliate_id", affiliateIdParam);
-  if (publisherIdParam)
-    finalPreview.searchParams.set("pub_id", publisherIdParam);
-  if (sourceParam) finalPreview.searchParams.set("source", sourceParam);
-  if (advertiserIdParam)
-    finalPreview.searchParams.set("advertiser_id", advertiserIdParam);
-  // Optional: include tracking domain
-  if (host) finalPreview.searchParams.set("tracking_domain", host);
-
-  // Replace placeholder tokens with runtime clickId
-  // Example: ref_id={gclid} -> ref_id=clickId
-  const refId = finalPreview.searchParams.get("ref_id");
-  if (clickId) {
-    const newRef = (refId || "{gclid}")
-      .replace("{gclid}", clickId)
-      .replace("{gclikcID}", clickId)
-      .replace("{gclickid}", clickId);
-    finalPreview.searchParams.set("ref_id", newRef);
-  }
-
-  // ✅ CRITICAL: Replace camref value in redirection_url parameter
-  const redirectionRaw = finalPreview.searchParams.get("redirection_url");
-  if (redirectionRaw && clickId) {
-    try {
-      console.log('[API] Original redirection_url:', redirectionRaw);
-      
-      // Decode the redirection_url (it's URL encoded)
-      let decoded = decodeURIComponent(redirectionRaw);
-      
-      // Replace camref:1101l3MtY4 with camref:clickId
-      const replaced = decoded.replace(/camref:([A-Za-z0-9]+)/g, `camref:${clickId}`);
-      
-      console.log('[API] Modified redirection_url:', replaced);
-      
-      // Re-encode and set back
-      finalPreview.searchParams.set("redirection_url", encodeURIComponent(replaced));
-    } catch (e) {
-      console.error("[API] Failed to replace camref in redirection_url:", e);
-    }
-  }
-
-    // Persist the fully-parameterized preview URL back to Firestore
-    const finalUrlString = finalPreview.toString();
-    try {
-      // Update affiliateLinks doc with final URL
-      await updateDoc(doc(firestore, "affiliateLinks", clickId), {
-        finalPreviewUrl: finalUrlString,
-        updatedAt: serverTimestamp(),
-      });
-
-      // Upsert in affiliateClicks: store the finalized URL on the latest entry
-      if (affiliateIdParam) {
-        const perAffiliateRef = doc(
-          firestore,
-          "affiliateClicks",
-          affiliateIdParam
-        );
-
-        const perAffiliateSnap = await getDoc(perAffiliateRef);
-        const clickEntry = {
-          clickId,
-          campaignId: campaignIdParam || null,
-          publisherId: publisherIdParam || null,
-          source: sourceParam || null,
-          advertiserId: advertiserIdParam || null,
-          ipAddress: ip,
-          userAgent,
-          previewUrl: finalUrlString,
-          timestamp: serverResolvedAt,
-        };
-        if (perAffiliateSnap.exists()) {
-          await updateDoc(perAffiliateRef, {
-            clicks: arrayUnion(clickEntry),
-            lastActivity: serverResolvedAt,
-          });
-        } else {
-          await setDoc(perAffiliateRef, {
-            affiliateId: affiliateIdParam,
-            clicks: [clickEntry],
-            createdAt: serverResolvedAt,
-            lastActivity: serverResolvedAt,
-          });
-        }
-      }
-
-      // Update session log latest URL
-      await updateDoc(doc(firestore, "trackingSessions", clickId), {
-        previewUrl: finalUrlString,
-        lastUpdatedAt: serverResolvedAt,
-        apiCalls: arrayUnion({
-          timestamp: serverResolvedAt,
-          type: "final_preview",
-          url: finalUrlString,
-        }),
-      });
-    } catch (persistErr) {
-      console.error("[API] Failed to persist final URL:", persistErr);
-    }
-
+  // After all Firestore operations, redirect to the final URL
+  try {
     // Prepare cookie to help reuse on subsequent calls (24h)
-    try {
-      const cookieKey = `click_session_${affiliateIdParam || ""}_${
-        campaignIdParam || ""
-      }_${ip}`;
-      const cookieVal = encodeURIComponent(
-        JSON.stringify({ clickId, lastClick: Date.now() })
-      );
-      const cookie = `${cookieKey}=${cookieVal}; Max-Age=${
-        24 * 60 * 60
-      }; Path=/; SameSite=Lax`;
-      const headers = new Headers({
-        Location: finalUrlString,
-        "Set-Cookie": cookie,
-      });
-
-      // Optional debug flag: logs in browser console before redirecting
-      const debug = sp.get("debug");
-      if (debug === "1" || debug === "true") {
-        const payload = {
-          previewUrl: finalUrlString,
-          params: {
-            click_id: clickId,
-            campaign_id: campaignIdParam || null,
-            affiliate_id: affiliateIdParam || null,
-            pub_id: publisherIdParam || null,
-            source: sourceParam || null,
-            advertiser_id: advertiserIdParam || null,
-            tracking_domain: host || null,
-            ip: ip || null,
-          },
-          resolvedFrom,
-        };
-        const html = `<!doctype html><html><head><meta charset="utf-8"><title>Redirecting...</title></head><body><script>
-          (function(){
-            const data = ${JSON.stringify(payload)};
-            console.log('Preview URL with DB params:', data.previewUrl);
-            console.log('Params:', data.params);
-            console.log('Resolved From:', data.resolvedFrom);
-            setTimeout(function(){ window.location.href = data.previewUrl; }, 100);
-          })();
-        </script>
-        <noscript>
-          JavaScript is required. Continue to <a href="${finalUrlString}">destination</a>.
-        </noscript></body></html>`;
-        return new Response(html, { status: 200, headers });
-      }
-
-      return new Response(null, { status: 302, headers });
-    } catch {
-      // fallback normal redirect
-    }
+    const cookieKey = `click_session_${affiliateIdParam || ""}_${
+      campaignIdParam || ""
+    }_${ip}`;
+    const cookieVal = encodeURIComponent(
+      JSON.stringify({ clickId, lastClick: Date.now() })
+    );
+    const cookie = `${cookieKey}=${cookieVal}; Max-Age=${
+      24 * 60 * 60
+    }; Path=/; SameSite=Lax`;
+    const headers = new Headers({
+      Location: finalUrlString,
+      "Set-Cookie": cookie,
+    });
 
     // Optional debug flag: logs in browser console before redirecting
     const debug = sp.get("debug");
     if (debug === "1" || debug === "true") {
       const payload = {
-        previewUrl: finalPreview.toString(),
+        previewUrl: finalUrlString,
         params: {
           click_id: clickId,
           campaign_id: campaignIdParam || null,
@@ -407,28 +339,27 @@ export async function GET(req) {
           ip: ip || null,
         },
         resolvedFrom,
+        firestoreSaved: true,
       };
       const html = `<!doctype html><html><head><meta charset="utf-8"><title>Redirecting...</title></head><body><script>
         (function(){
           const data = ${JSON.stringify(payload)};
-          console.log('Preview URL with DB params:', data.previewUrl);
-          console.log('Params:', data.params);
+          console.log('Final Preview URL:', data.previewUrl);
+          console.log('Dynamic Parameters:', data.params);
           console.log('Resolved From:', data.resolvedFrom);
+          console.log('Firestore Save Status:', data.firestoreSaved);
           setTimeout(function(){ window.location.href = data.previewUrl; }, 100);
         })();
       </script>
       <noscript>
-        JavaScript is required. Continue to <a href="${finalPreview.toString()}">destination</a>.
+        JavaScript is required. Continue to <a href="${finalUrlString}">destination</a>.
       </noscript></body></html>`;
-      return new Response(html, {
-        status: 200,
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
+      return new Response(html, { status: 200, headers });
     }
 
+    return new Response(null, { status: 302, headers });
+  } catch {
+    // Fallback normal redirect
     return Response.redirect(finalUrlString, 302);
-  } catch (e) {
-    console.error("[API] Failed to build final preview URL, falling back:", e);
-    return Response.redirect(previewUrl, 302);
   }
 }
