@@ -74,6 +74,7 @@ export async function GET(req) {
   // Get the click_id from the request (passed from demo page as first parameter)
   const clickId = sp.get("click_id")
   const redirectUrl = sp.get("redirect_url")
+  const returnJson = sp.get("return_json") === "true" // New parameter to control response type
   
   if (!redirectUrl) {
     return new Response(JSON.stringify({ error: "Missing redirect_url parameter" }), {
@@ -89,7 +90,7 @@ export async function GET(req) {
   const allParams = Object.fromEntries(sp.entries())
   
   // Remove parameters that shouldn't be passed to final URL
-  const paramsToRemove = ['redirect_url', 'preview_url']
+  const paramsToRemove = ['redirect_url', 'preview_url', 'return_json']
   paramsToRemove.forEach(param => delete allParams[param])
 
   // Start by merging into the OUTER affiliate URL WITH CLICK_ID AS FIRST PARAMETER
@@ -254,8 +255,26 @@ export async function GET(req) {
     console.error("[API] Firestore logging failed:", e)
   }
 
-//   console.log('🎯 Final redirect URL with click_id as first parameter:', finalRedirect)
-//   console.log('🔄 Is repeat click:', sp.get("is_repeat_click") === "true" ? 'Yes' : 'No')
+  // Return JSON instead of redirecting if requested
+  if (returnJson) {
+    return new Response(JSON.stringify({ 
+      success: true,
+      previewUrl: decodedRedirectUrl,
+      finalRedirectUrl: finalRedirect,
+      clickId: clickId,
+      timestamp: new Date().toISOString()
+    }), {
+      status: 200,
+      headers: { 
+        "content-type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type"
+      },
+    })
+  }
+
+  // Default behavior: redirect immediately
   return Response.redirect(finalRedirect, 302)
 }
 
