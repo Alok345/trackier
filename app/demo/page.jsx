@@ -16,23 +16,28 @@ export default function DemoPage() {
 
     const trackAndRedirect = async () => {
       try {
-        
+        // Extract all parameters from the URL
+        const allParams = {}
+        searchParams.forEach((value, key) => {
+          allParams[key] = value
+        })
+
         const campaignId = searchParams.get("campaign_id")
         const affiliateId = searchParams.get("affiliate_id")
         const publisherId = searchParams.get("pub_id") || searchParams.get("publisher_id")
         const source = searchParams.get("source") || searchParams.get("utm_source")
         const redirectUrl = searchParams.get("redirect_url")
+        const finalUrl = searchParams.get("url") // This is the final destination URL
 
-        if (!redirectUrl) {
+        if (!finalUrl && !redirectUrl) {
           window.location.href = "https://example.com"
           return
         }
 
-       
+        // Generate click ID and check for repeat clicks
         let clickId = generateClickId()
         let isRepeatClick = false
 
-        
         const sessionKey = `click_session_${affiliateId}_${campaignId}`
         const existingSession = localStorage.getItem(sessionKey)
         if (existingSession) {
@@ -46,7 +51,6 @@ export default function DemoPage() {
           }
         }
 
-        
         localStorage.setItem(sessionKey, JSON.stringify({
           clickId,
           lastClick: Date.now(),
@@ -54,7 +58,7 @@ export default function DemoPage() {
           campaignId
         }))
 
-        
+        // Get client IP
         let ipAddress = "unknown"
         try {
           ipAddress = await getClientIP()
@@ -62,7 +66,7 @@ export default function DemoPage() {
           console.error("Failed to get IP:", e)
         }
 
-        
+        // Prepare tracking data
         const trackingData = {
           clickId,
           campaignId,
@@ -76,10 +80,21 @@ export default function DemoPage() {
           screenResolution: `${window.screen.width}x${window.screen.height}`,
           language: navigator.language,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          isRepeatClick: isRepeatClick
+          isRepeatClick: isRepeatClick,
+          // Store all extracted parameters
+          extractedParameters: allParams
         }
 
-        
+        // 🔹 NEW: Store extracted URL data in extractUrl collection
+        if (affiliateId) {
+          try {
+            await storeExtractedUrlData(affiliateId, trackingData, finalUrl || redirectUrl, allParams)
+          } catch (extractErr) {
+            console.error("Failed to store extracted URL data:", extractErr)
+          }
+        }
+
+        // Store in affiliateLinks collection (existing functionality)
         if (affiliateId) {
           try {
             const affiliateDocRef = doc(firestore, "affiliateLinks", affiliateId)
@@ -101,7 +116,7 @@ export default function DemoPage() {
               })
             }
 
-           
+            // Store in trackingSessions collection
             const sessionDocRef = doc(firestore, "trackingSessions", clickId)
             const existingSessionDoc = await getDoc(sessionDocRef)
             
@@ -127,28 +142,28 @@ export default function DemoPage() {
           }
         }
 
-       
-        const previewUrl = decodeURIComponent(redirectUrl)
-        
-        
-        const previewUrlWithParams = new URL(previewUrl)
-        previewUrlWithParams.searchParams.set('click_id', clickId)
-        previewUrlWithParams.searchParams.set('campaign_id', campaignId)
-        previewUrlWithParams.searchParams.set('affiliate_id', affiliateId)
-        previewUrlWithParams.searchParams.set('pub_id', publisherId)
-        previewUrlWithParams.searchParams.set('source', source)
-        previewUrlWithParams.searchParams.set('is_repeat_click', isRepeatClick.toString())
+        // Redirect to final URL with tracking parameters
+        const destinationUrl = finalUrl || redirectUrl
+        if (destinationUrl) {
+          const finalUrlWithParams = new URL(decodeURIComponent(destinationUrl))
+          
+          // Add tracking parameters to final URL
+          finalUrlWithParams.searchParams.set('click_id', clickId)
+          if (campaignId) finalUrlWithParams.searchParams.set('campaign_id', campaignId)
+          if (affiliateId) finalUrlWithParams.searchParams.set('affiliate_id', affiliateId)
+          if (publisherId) finalUrlWithParams.searchParams.set('pub_id', publisherId)
+          if (source) finalUrlWithParams.searchParams.set('source', source)
+          finalUrlWithParams.searchParams.set('is_repeat_click', isRepeatClick.toString())
 
-       
-        console.log('🎯 Redirecting to Preview URL:', previewUrlWithParams.toString())
-
-        
-        window.location.href = previewUrlWithParams.toString()
+          console.log('🎯 Redirecting to Final URL:', finalUrlWithParams.toString())
+          window.location.href = finalUrlWithParams.toString()
+        } else {
+          window.location.href = "https://example.com"
+        }
 
       } catch (err) {
         console.error("Tracking error:", err)
-        
-        const redirectUrl = searchParams.get("redirect_url")
+        const redirectUrl = searchParams.get("redirect_url") || searchParams.get("url")
         if (redirectUrl) {
           window.location.href = decodeURIComponent(redirectUrl)
         } else {
@@ -168,4 +183,94 @@ export default function DemoPage() {
       </div>
     </div>
   )
+}
+
+// 🔹 NEW FUNCTION: Store extracted URL data in Firestore
+async function storeExtractedUrlData(affiliateId, trackingData, finalUrl, allParams) {
+  try {
+    const extractUrlDocRef = doc(firestore, "extractUrl", affiliateId)
+    const extractUrlDocSnap = await getDoc(extractUrlDocRef)
+
+    const extractedData = {
+      // Core identification
+      affiliateId: affiliateId,
+      clickId: trackingData.clickId,
+      
+      // URL information
+      finalUrl: finalUrl,
+      extractedAt: new Date().toISOString(),
+      
+      // All parameters stored separately
+      parameters: {
+        // Campaign parameters
+        campaignId: allParams.campaign_id || allParams.campaignId,
+        affiliateId: allParams.affiliate_id || allParams.affiliateId,
+        publisherId: allParams.pub_id || allParams.publisher_id || allParams.publisherId,
+        source: allParams.source || allParams.utm_source,
+        advertiserId: allParams.advertiser_id || allParams.advertiserId,
+        
+        // URL parameters
+        redirectUrl: allParams.redirect_url,
+        url: allParams.url,
+        
+        // Tracking parameters
+        clickId: allParams.click_id,
+        forceTransparent: allParams.force_transparent,
+        isRepeatClick: allParams.is_repeat_click,
+        
+        // UTM parameters
+        utmSource: allParams.utm_source,
+        utmMedium: allParams.utm_medium,
+        utmCampaign: allParams.utm_campaign,
+        utmTerm: allParams.utm_term,
+        utmContent: allParams.utm_content,
+        
+        // Additional parameters (capture all)
+        ...allParams
+      },
+      
+      // Client information
+      clientInfo: {
+        ipAddress: trackingData.ipAddress,
+        userAgent: trackingData.userAgent,
+        screenResolution: trackingData.screenResolution,
+        language: trackingData.language,
+        timezone: trackingData.timezone,
+        referrer: trackingData.referrer
+      },
+      
+      // Click information
+      clickInfo: {
+        isRepeatClick: trackingData.isRepeatClick,
+        timestamp: trackingData.timestamp
+      }
+    }
+
+    if (extractUrlDocSnap.exists()) {
+      // Update existing document - add to history array
+      await updateDoc(extractUrlDocRef, {
+        extractionHistory: arrayUnion(extractedData),
+        totalExtractions: (extractUrlDocSnap.data().totalExtractions || 0) + 1,
+        lastExtractedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      })
+    } else {
+      // Create new document
+      await setDoc(extractUrlDocRef, {
+        affiliateId: affiliateId,
+        extractionHistory: [extractedData],
+        totalExtractions: 1,
+        firstExtractedAt: new Date().toISOString(),
+        lastExtractedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      })
+    }
+
+    console.log('✅ Extracted URL data stored successfully for affiliate:', affiliateId)
+    
+  } catch (error) {
+    console.error('❌ Error storing extracted URL data:', error)
+    throw error
+  }
 }

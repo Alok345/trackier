@@ -202,6 +202,8 @@ export default function CreateCampaignLink() {
   // Generate the tracking link that points to demo page
 // Generate the tracking link that points to demo page
 // In your campaign link generation function
+// In your campaign link generation function
+// In your generateTrackingLink function
 const generateTrackingLink = (campaign) => {
   const { domainUrl, advertiserId, source } = formData
   const campaignId = campaign.campaignId
@@ -213,38 +215,17 @@ const generateTrackingLink = (campaign) => {
     return null
   }
 
-  // Create tracking URL that points to server redirect (no final URL exposed)
+  // Create tracking URL that points to API redirect
   const trackingUrl = new URL(`${window.location.origin}/api/redirect`)
 
-  // 🔹 ALL PARAMETERS TO PASS THROUGH THE ENTIRE CHAIN
+  // All parameters to pass through
   const trackingParams = {
-    // Click tracking (generated server-side; do not include here)
-    
-    // Core identifiers
     campaign_id: campaignId,
     affiliate_id: affiliateId,
-    
-    // Publisher parameters
-    ...(publisherId && { 
-      pub_id: publisherId,
-    }),
-    
-    // Source parameters
-    ...(source && { 
-      source: source,
-    }),
-    
-    // URL parameter: pass previewUrl at generation time
-    ...(campaign.previewUrl && {
-      url: campaign.previewUrl,
-    }),
-    
-    // Advertiser parameters
-    ...(advertiserId && advertiserId !== "all" && { 
-      advertiser_id: advertiserId 
-    }),
-
-    // Additional tracking parameters (optional)
+    ...(publisherId && { pub_id: publisherId }),
+    ...(source && { source: source }),
+    url: campaign.previewUrl || campaign.finalUrl || domainUrl,
+    ...(advertiserId && advertiserId !== "all" && { advertiser_id: advertiserId }),
     force_transparent: 'true'
   }
 
@@ -266,7 +247,7 @@ const generateTrackingLink = (campaign) => {
       advertiserId: advertiserId !== "all" ? advertiserId : null,
       source,
       domain: domainUrl,
-      finalUrl: campaign.previewUrl || domainUrl,
+      finalUrl: campaign.previewUrl || campaign.finalUrl || domainUrl,
     }
   }
 }
