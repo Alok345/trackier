@@ -142,9 +142,9 @@ const generateCampaignId = (title) => {
   const timestamp = Date.now().toString().slice(-6);
   
   
-  const randomStr = Math.random().toString(36).substring(2, 6);
+  const randomStr = Math.random().toString(36).substring(2, 8);
   
-  return `${cleanTitle}-${timestamp}${randomStr}`;
+  return `${timestamp}${randomStr}`;
 }
 
 const handleSubmit = async (e) => {
@@ -156,7 +156,7 @@ const handleSubmit = async (e) => {
   hasSubmitted.current = true
 
   try {
-    // Basic validation
+    
     if (!formData.title || !formData.advertiser || !formData.defaultCampaignUrl) {
       toast.error("Please fill in all required fields")
       hasSubmitted.current = false
