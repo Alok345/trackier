@@ -52,7 +52,7 @@ function Page() {
   const generatePublisherId = (name) => {
     const cleanName = name.trim().toLowerCase().replace(/\s+/g, "-");
     const rand = Math.random().toString(36).substring(2, 8);
-    return `${cleanName}-${rand}`;
+    return `${rand}`;
   };
 
   const handleChange = (e) => {

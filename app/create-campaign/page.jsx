@@ -134,14 +134,14 @@ const generateCampaignId = (title) => {
   const cleanTitle = title
     .trim()
     .toLowerCase()
-    .replace(/[^a-zA-Z0-9\s]/g, '')
+    .replace(/[^0-9\s]/g, '')
     .replace(/\s+/g, '-')
     .substring(0, 30); // Limit length
   
   // Add timestamp for uniqueness
   const timestamp = Date.now().toString().slice(-6);
   
-  // Add random string for additional uniqueness
+  
   const randomStr = Math.random().toString(36).substring(2, 6);
   
   return `${cleanTitle}-${timestamp}${randomStr}`;

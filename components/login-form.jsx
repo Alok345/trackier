@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label"
 import { signInWithEmailAndPassword } from "firebase/auth"
 import { doc, getDoc } from "firebase/firestore"
 import { auth, firestore } from "@/lib/firestore"
+import Link from "next/link"
 
 export function LoginForm({ className, ...props }) {
   const router = useRouter()
@@ -113,10 +114,12 @@ export function LoginForm({ className, ...props }) {
           </form>
         </CardContent>
       </Card>
-      <div className="text-balance text-center text-xs text-muted-foreground [&_a]:underline [&_a]:underline-offset-4 [&_a]:hover:text-primary">
-        By clicking continue, you agree to our <a href="#">Terms of Service</a>{" "}
-        and <a href="#">Privacy Policy</a>.
-      </div>
+     <div className="text-balance text-center text-xs text-muted-foreground [&_a]:underline [&_a]:underline-offset-4 [&_a]:hover:text-primary">
+  By clicking continue, you agree to our{" "}
+  <Link href="/terms-and-conditions">Terms of Service</Link> and{" "}
+  <Link href="/privacy-policy">Privacy Policy</Link>.
+</div>
+
     </div>
   )
 }
