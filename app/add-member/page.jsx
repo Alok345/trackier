@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select";
 import { doc, setDoc } from "firebase/firestore";
 import { auth, firestore } from "@/lib/firestore";
-import { toast } from "react-hot-toast"; // Make sure react-hot-toast is installed
+import { toast } from "react-hot-toast"; 
 
 export default function Page() {
   const [email, setEmail] = useState("");
@@ -35,15 +35,15 @@ export default function Page() {
     e.preventDefault();
     setLoading(true);
 
-   // inside handleSubmit
+   
 try {
-  const defaultPassword = "Admin@123";
+  
 
-  // 1️⃣ Create Firebase Auth user
+  
   const userCredential = await createUserWithEmailAndPassword(
     auth,
     email,
-    defaultPassword
+    phone
   );
   const uid = userCredential.user.uid;
 

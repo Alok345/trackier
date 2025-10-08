@@ -203,6 +203,33 @@ export default function CreateCampaignLink() {
 // Generate the tracking link that points to demo page
 // In your campaign link generation function
 // In your campaign link generation function
+// Ensure nested redirection_url is encoded exactly once inside a target URL
+const ensureSingleEncodedRedirectionUrl = (rawUrl) => {
+  try {
+    const u = new URL(rawUrl);
+    // If the target has a nested redirection_url param, normalize it
+    const nested = u.searchParams.get('redirection_url');
+    if (nested) {
+      // Detect double-encoding (presence of "%25") and decode once
+      let normalized = nested;
+      if (/%25/.test(normalized)) {
+        try { normalized = decodeURIComponent(normalized); } catch {}
+      }
+      // If still looks unencoded (contains "http" and query chars), encode once
+      if (/^https?:\/\//i.test(normalized) && /[?&=]/.test(normalized) && !/%[0-9A-Fa-f]{2}/.test(normalized)) {
+        normalized = encodeURIComponent(normalized);
+      } else if (!/%[0-9A-Fa-f]{2}/.test(normalized) && /^https?:\/\//i.test(normalized)) {
+        // Encode plain URL if not percent-encoded
+        normalized = encodeURIComponent(normalized);
+      }
+      u.searchParams.set('redirection_url', normalized);
+    }
+    return u.toString();
+  } catch {
+    return rawUrl;
+  }
+};
+
 // In your generateTrackingLink function
 const generateTrackingLink = (campaign) => {
   const { domainUrl, advertiserId, source } = formData
@@ -218,13 +245,18 @@ const generateTrackingLink = (campaign) => {
   // Create tracking URL that points to API redirect
   const trackingUrl = new URL(`${window.location.origin}/api/redirect`)
 
+  // Build safe target URL and encode it once for transport
+  const targetRaw = campaign.previewUrl || campaign.finalUrl || domainUrl
+  const targetSafe = ensureSingleEncodedRedirectionUrl(targetRaw)
+  const targetEncodedOnce = encodeURIComponent(targetSafe)
+
   // All parameters to pass through
   const trackingParams = {
     campaign_id: campaignId,
     affiliate_id: affiliateId,
     ...(publisherId && { pub_id: publisherId }),
     ...(source && { source: source }),
-    url: campaign.previewUrl || campaign.finalUrl || domainUrl,
+    url: targetEncodedOnce,
     ...(advertiserId && advertiserId !== "all" && { advertiser_id: advertiserId }),
     force_transparent: 'true'
   }

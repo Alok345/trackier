@@ -7,28 +7,8 @@ import {
   arrayUnion,
   serverTimestamp,
 } from "firebase/firestore";
-import { generateClickId } from "@/lib/affiliateUtils";
 
-// Chain tracking function - moved outside main function
-async function initiateChainTracking(affiliateId, clickId, startUrl, campaignId, publisherId) {
-  try {
-    const trackUrl = new URL(`${process.env.NEXTAUTH_URL || 'https://sgs-tracker.vercel.app'}/api/track-chain`);
-    
-    trackUrl.searchParams.set('start_url', startUrl);
-    trackUrl.searchParams.set('click_id', clickId);
-    trackUrl.searchParams.set('affiliate_id', affiliateId);
-    trackUrl.searchParams.set('campaign_id', campaignId || '');
-    trackUrl.searchParams.set('pub_id', publisherId || '');
-    
-    console.log('🚀 Initiating chain tracking:', trackUrl.toString());
-    
-    return trackUrl.toString();
-    
-  } catch (error) {
-    console.error('Error initiating chain tracking:', error);
-    return startUrl; // Fallback to original URL
-  }
-}
+// Note: chain tracking disabled for simple redirect flow
 
 export async function GET(req) {
   const url = new URL(req.url);
@@ -67,53 +47,58 @@ export async function GET(req) {
       });
     }
 
-    // Generate click ID
-    const clickId = generateClickId();
-    console.log('🆔 Generated clickId:', clickId);
+    // Create a simple tracking id (no runtime clickId generation)
+    const trackingId = `${sp.get("campaign_id") || 'unknown'}_${Date.now()}`;
+    console.log('🆔 Generated trackingId:', trackingId);
 
-    // Build the final redirect URL - NO REPLACEMENTS, just pass through
-    let finalRedirectUrl;
-    try {
-      finalRedirectUrl = buildRedirectUrl(previewUrl, clickId, {
-        campaignId: campaignIdParam,
-        affiliateId: affiliateIdParam,
-        publisherId: publisherIdParam,
-        source: sourceParam,
-      });
-      console.log('🎯 Final redirect URL:', finalRedirectUrl);
-    } catch (urlError) {
-      console.error('❌ URL building failed:', urlError);
-      return new Response(JSON.stringify({ error: "Failed to build redirect URL" }), {
-        status: 500,
-        headers: { "content-type": "application/json" },
-      });
-    }
+    // Resolve full redirect chain server-side to the true destination
+    const chainResult = await followRedirectionChain(previewUrl);
+    const finalRedirectUrl = chainResult.finalUrl || buildRedirectUrl(previewUrl);
+    console.log('🔗 Redirect chain count:', chainResult.redirectCount);
+    console.log('🔍 Redirect chain:');
+    (chainResult.redirectChain || []).forEach((u, i) => console.log(`${i + 1}. ${u}`));
+    console.log('🎯 Final redirect URL (resolved):', finalRedirectUrl);
 
     // Store tracking data (fire and forget)
     storeTrackingData({
-      clickId,
+      trackingId,
       affiliateId: affiliateIdParam,
       campaignId: campaignIdParam,
       publisherId: publisherIdParam,
       source: sourceParam,
       previewUrl: previewUrl,
       finalRedirectUrl: finalRedirectUrl,
+      redirectChain: chainResult.redirectChain,
+      redirectCount: chainResult.redirectCount,
       originalParams: Object.fromEntries(sp.entries())
     }).catch(error => {
       console.error('❌ Tracking storage failed:', error);
     });
 
-    // 🔥 Use chain tracking instead of direct redirect
-    const trackingUrl = await initiateChainTracking(
-      affiliateIdParam, 
-      clickId, 
-      finalRedirectUrl, 
-      campaignIdParam, 
-      publisherIdParam
-    );
+    // Also persist final destination URL parameters immediately for reliability
+    try {
+      const paramsObj = {};
+      const parsedFinal = new URL(finalRedirectUrl);
+      parsedFinal.searchParams.forEach((v, k) => { paramsObj[k] = v });
+      await storeFinalAtRedirect({
+        affiliateId: affiliateIdParam,
+        trackingId,
+        finalUrl: finalRedirectUrl,
+        parameters: paramsObj,
+        linkType: 'redirect_open',
+        campaignData: {
+          campaign_id: campaignIdParam,
+          publisher_id: publisherIdParam,
+          source: sourceParam
+        }
+      });
+    } catch (e) {
+      console.warn('⚠️ Could not persist final destination params at redirect time:', e?.message || e);
+    }
 
-    console.log('🔄 Redirecting through chain tracker:', trackingUrl);
-    return Response.redirect(trackingUrl, 302);
+    // Simple redirect to the decoded target URL
+    console.log('🔄 Redirecting to:', finalRedirectUrl);
+    return Response.redirect(finalRedirectUrl, 302);
 
   } catch (error) {
     console.error('🚨 Critical error in redirect API:', error);
@@ -127,7 +112,7 @@ export async function GET(req) {
   }
 }
 
-function buildRedirectUrl(previewUrl, clickId, trackingParams) {
+function buildRedirectUrl(previewUrl) {
   try {
     // Simply return the original previewUrl without any modifications
     console.log('🔧 Using original URL without modifications');
@@ -139,20 +124,83 @@ function buildRedirectUrl(previewUrl, clickId, trackingParams) {
   }
 }
 
+async function followRedirectionChain(url, maxRedirects = 10) {
+  let currentUrl = url;
+  let redirectCount = 0;
+  const redirectChain = [url];
+
+  while (redirectCount < maxRedirects) {
+    try {
+      // Attempt 1: HEAD manual
+      const headRes = await fetch(currentUrl, { method: 'HEAD', redirect: 'manual' });
+      if (headRes.status >= 300 && headRes.status < 400) {
+        const loc = headRes.headers.get('location');
+        if (loc) {
+          const nextUrl = new URL(loc, currentUrl).toString();
+          currentUrl = nextUrl;
+          redirectChain.push(nextUrl);
+          redirectCount++;
+          continue;
+        }
+      }
+
+      // Attempt 2: GET manual
+      const getRes = await fetch(currentUrl, { method: 'GET', redirect: 'manual' });
+      if (getRes.status >= 300 && getRes.status < 400) {
+        const loc2 = getRes.headers.get('location');
+        if (loc2) {
+          const nextUrl = new URL(loc2, currentUrl).toString();
+          currentUrl = nextUrl;
+          redirectChain.push(nextUrl);
+          redirectCount++;
+          continue;
+        }
+      }
+
+      // Attempt 3: 200 with meta refresh in body
+      if (getRes.status >= 200 && getRes.status < 300) {
+        try {
+          const html = await getRes.text();
+          const metaMatch = html.match(/<meta[^>]*http-equiv=["']?refresh["']?[^>]*>/i);
+          if (metaMatch) {
+            const contentMatch = metaMatch[0].match(/content=["']?\s*\d+\s*;\s*url=([^"'>\s]+)/i);
+            if (contentMatch && contentMatch[1]) {
+              const decoded = contentMatch[1].replace(/&amp;/g, '&');
+              const nextUrl = new URL(decoded, currentUrl).toString();
+              currentUrl = nextUrl;
+              redirectChain.push(nextUrl);
+              redirectCount++;
+              continue;
+            }
+          }
+        } catch (_) { /* ignore */ }
+      }
+      // No redirect signals; stop
+      break;
+    } catch (_) {
+      break;
+    }
+  }
+
+  return { finalUrl: currentUrl, redirectChain, redirectCount };
+}
+
 async function storeTrackingData(data) {
   try {
-    const { clickId, affiliateId, originalParams, finalRedirectUrl, previewUrl } = data;
+    const { trackingId, affiliateId, originalParams, finalRedirectUrl, previewUrl, redirectChain } = data;
 
     // Store in affiliateLinks collection
-    const affiliateLinkRef = doc(firestore, "affiliateLinks", clickId);
+    const affiliateLinkRef = doc(firestore, "affiliateLinks", trackingId);
     await setDoc(affiliateLinkRef, {
-      clickId,
+      trackingId,
       affiliateId,
       campaignId: data.campaignId || null,
       publisherId: data.publisherId || null,
       source: data.source || null,
       previewUrl: previewUrl,
       finalRedirectUrl: finalRedirectUrl,
+      redirectChain: redirectChain || null,
+      redirectCount: Array.isArray(redirectChain) ? redirectChain.length - 1 : null,
       originalParams: originalParams,
       status: "redirected",
       createdAt: serverTimestamp(),
@@ -165,7 +213,7 @@ async function storeTrackingData(data) {
 
     const extractionData = {
       affiliateId: affiliateId,
-      clickId: clickId,
+      trackingId: trackingId,
       finalUrl: finalRedirectUrl,
       extractedAt: new Date().toISOString(),
       parameters: originalParams,
@@ -198,5 +246,60 @@ async function storeTrackingData(data) {
   } catch (error) {
     console.error('❌ Error storing tracking data:', error);
     throw error;
+  }
+}
+
+async function storeFinalAtRedirect({ affiliateId, trackingId, finalUrl, parameters, linkType, campaignData }) {
+  const finalDocRef = doc(firestore, "previewUrlTracking", affiliateId);
+  const finalDocSnap = await getDoc(finalDocRef);
+  // Build extractedParams with common fields broken out + all_parameters
+  const extractedParams = {
+    utm_source: parameters?.utm_source || '',
+    utm_medium: parameters?.utm_medium || '',
+    utm_campaign: parameters?.utm_campaign || '',
+    utm_term: parameters?.utm_term || '',
+    utm_content: parameters?.utm_content || '',
+    clickref: parameters?.clickref || '',
+    partner_id: parameters?.partner_id || '',
+    sub_id: parameters?.sub_id || '',
+    affiliate_id: parameters?.affiliate_id || '',
+    campaign_id: parameters?.campaign_id || '',
+    pub_id: parameters?.pub_id || parameters?.publisher_id || '',
+    source: parameters?.source || '',
+    advertiser_id: parameters?.advertiser_id || '',
+    domain_url: parameters?.domain_url || '',
+    all_parameters: parameters || {}
+  };
+  const trackingData = {
+    trackingId,
+    finalUrl,
+    parameters,
+    extractedParams,
+    timestamp: new Date().toISOString(),
+    trackedAt: new Date().toISOString(),
+    linkType: linkType || 'redirect_open',
+    campaignData: campaignData || null,
+    parameterCount: Object.keys(parameters || {}).length,
+    domain: (() => { try { return new URL(finalUrl).hostname } catch { return null } })(),
+    browsingCompleted: true
+  };
+
+  if (finalDocSnap.exists()) {
+    await updateDoc(finalDocRef, {
+      trackingData: arrayUnion(trackingData),
+      totalTrackings: (finalDocSnap.data().totalTrackings || 0) + 1,
+      lastTracking: new Date().toISOString(),
+      updatedAt: serverTimestamp()
+    });
+  } else {
+    await setDoc(finalDocRef, {
+      affiliateId,
+      trackingData: [trackingData],
+      totalTrackings: 1,
+      firstTracking: new Date().toISOString(),
+      lastTracking: new Date().toISOString(),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
   }
 }
