@@ -12,7 +12,7 @@ import { generateClickId } from "@/lib/affiliateUtils";
 // Chain tracking function - moved outside main function
 async function initiateChainTracking(affiliateId, clickId, startUrl, campaignId, publisherId) {
   try {
-    const trackUrl = new URL(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/track-chain`);
+    const trackUrl = new URL(`${process.env.NEXTAUTH_URL || 'https://sgs-tracker.vercel.app'}/api/track-chain`);
     
     trackUrl.searchParams.set('start_url', startUrl);
     trackUrl.searchParams.set('click_id', clickId);
