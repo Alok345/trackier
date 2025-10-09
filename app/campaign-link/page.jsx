@@ -230,43 +230,50 @@ const ensureSingleEncodedRedirectionUrl = (rawUrl) => {
   }
 };
 
-// In your generateTrackingLink function
+// Enhanced link generation with visual traversal
 const generateTrackingLink = (campaign) => {
-  const { domainUrl, advertiserId, source } = formData
-  const campaignId = campaign.campaignId
-  const publisherId = selectedPublisherIds[campaign.id]
-  const affiliateId = userProfile?.profileId
+  const { domainUrl, advertiserId, source } = formData;
+  const campaignId = campaign.campaignId;
+  const publisherId = selectedPublisherIds[campaign.id];
+  const affiliateId = userProfile?.profileId;
 
   if (!domainUrl || !campaignId || !affiliateId) {
-    toast.error("Please select a domain, campaign and ensure user profile is loaded")
-    return null
+    toast.error("Please select a domain, campaign and ensure user profile is loaded");
+    return null;
   }
 
-  // Create tracking URL that points to API redirect
-  const trackingUrl = new URL(`${window.location.origin}/api/redirect`)
+  // Use the selected domain as the starting point
+  const baseDomain = domainUrl.replace(/\/$/, ''); // Remove trailing slash
+  const trackingUrl = new URL(`${baseDomain}/api/visual-redirect`);
 
-  // Build safe target URL and encode it once for transport
-  const targetRaw = campaign.previewUrl || campaign.finalUrl || domainUrl
-  const targetSafe = ensureSingleEncodedRedirectionUrl(targetRaw)
-  const targetEncodedOnce = encodeURIComponent(targetSafe)
+  // Prepare the target URL (previewUrl from campaign)
+  const targetUrl = campaign.previewUrl || campaign.finalUrl;
+  
+  if (!targetUrl) {
+    toast.error("Campaign has no preview URL configured");
+    return null;
+  }
 
-  // All parameters to pass through
+  console.log('👁️ Generating visual tracking link:');
+  console.log('  Starting Domain:', baseDomain);
+  console.log('  Target URL:', targetUrl);
+
+  // Build tracking parameters
   const trackingParams = {
     campaign_id: campaignId,
     affiliate_id: affiliateId,
     ...(publisherId && { pub_id: publisherId }),
     ...(source && { source: source }),
-    url: targetEncodedOnce,
-    ...(advertiserId && advertiserId !== "all" && { advertiser_id: advertiserId }),
-    force_transparent: 'true'
-  }
+    url: encodeURIComponent(targetUrl),
+    step: '0' // Start from step 0
+  };
 
   // Add all parameters to tracking URL
   Object.entries(trackingParams).forEach(([key, value]) => {
     if (value) {
-      trackingUrl.searchParams.set(key, value.toString())
+      trackingUrl.searchParams.set(key, value.toString());
     }
-  })
+  });
 
   return {
     fullLink: trackingUrl.toString(),
@@ -279,10 +286,12 @@ const generateTrackingLink = (campaign) => {
       advertiserId: advertiserId !== "all" ? advertiserId : null,
       source,
       domain: domainUrl,
-      finalUrl: campaign.previewUrl || campaign.finalUrl || domainUrl,
+      targetUrl: targetUrl,
+      linkType: 'visual_redirect',
+      hasVisualTraversal: true
     }
-  }
-}
+  };
+};
 
   // Generate and store link for a campaign
   const generateAndStoreLink = (campaign) => {
