@@ -1,4 +1,3 @@
-// /api/visual-redirect/route.js
 import { firestore } from "@/lib/firestore";
 import {
   doc,
@@ -6,24 +5,30 @@ import {
   setDoc,
   updateDoc,
   arrayUnion,
-  serverTimestamp
+  serverTimestamp,
+  collection,
+  addDoc
 } from "firebase/firestore";
 
-// Enhanced traversal with delays for visual experience
-async function traverseWithVisualDelays(initialUrl, delayMs = 800) {
+// Enhanced traversal with individual step storage
+async function traverseWithVisualDelays(initialUrl, delayMs = 800, trackingId) {
   let currentUrl = initialUrl;
   const redirectChain = [{
     url: initialUrl,
     timestamp: new Date().toISOString(),
     status: 'initial',
-    redirectNumber: 0
+    redirectNumber: 0,
+    stepId: `step_0_${Date.now()}`
   }];
   
   let redirectCount = 0;
   const maxRedirects = 10;
   const visitedUrls = new Set([initialUrl]);
 
-  console.log('🔗 Starting visual URL traversal...');
+  console.log('🔗 Starting visual URL traversal with step storage...');
+
+  // Store initial step
+  await storeIndividualStep(trackingId, redirectChain[0], 0);
 
   while (redirectCount < maxRedirects) {
     try {
@@ -34,9 +39,12 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800) {
       let metaRefreshUrl = null;
       let responseStatus = null;
       let contentType = null;
+      let headers = {};
+      let responseTime = null;
 
       // Try HEAD request first
       try {
+        const startTime = Date.now();
         const headResponse = await fetch(currentUrl, {
           method: 'HEAD',
           redirect: 'manual',
@@ -44,10 +52,16 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800) {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
           }
         });
+        responseTime = Date.now() - startTime;
 
         responseStatus = headResponse.status;
         contentType = headResponse.headers.get('content-type');
         locationHeader = headResponse.headers.get('location');
+
+        // Collect all headers for storage
+        headResponse.headers.forEach((value, key) => {
+          headers[key] = value;
+        });
 
         if (locationHeader && responseStatus >= 300 && responseStatus < 400) {
           finalUrl = new URL(locationHeader, currentUrl).toString();
@@ -59,6 +73,7 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800) {
       // If no Location header found, try GET request
       if (!locationHeader || !(responseStatus >= 300 && responseStatus < 400)) {
         try {
+          const startTime = Date.now();
           const getResponse = await fetch(currentUrl, {
             method: 'GET',
             redirect: 'manual',
@@ -66,10 +81,16 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800) {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
           });
+          responseTime = Date.now() - startTime;
 
           responseStatus = getResponse.status;
           contentType = getResponse.headers.get('content-type');
           locationHeader = getResponse.headers.get('location');
+
+          // Collect all headers for storage
+          getResponse.headers.forEach((value, key) => {
+            headers[key] = value;
+          });
 
           if (locationHeader && responseStatus >= 300 && responseStatus < 400) {
             finalUrl = new URL(locationHeader, currentUrl).toString();
@@ -95,18 +116,27 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800) {
         redirectCount++;
         visitedUrls.add(finalUrl);
         
-        redirectChain.push({
+        const stepData = {
           url: finalUrl,
           timestamp: new Date().toISOString(),
           status: 'redirected',
           redirectNumber: redirectCount,
-          redirectType: locationHeader ? 'http_redirect' : 'meta_refresh',
+          redirectType: locationHeader ? 'http_redirect' : metaRefreshUrl ? 'meta_refresh' : 'unknown',
           responseStatus: responseStatus,
           contentType: contentType,
-          delay: delayMs
-        });
+          responseTime: responseTime,
+          headers: headers,
+          previousUrl: currentUrl,
+          delay: delayMs,
+          stepId: `step_${redirectCount}_${Date.now()}`
+        };
         
-        console.log(`✅ [Step ${redirectCount}] Added to chain:`, finalUrl);
+        redirectChain.push(stepData);
+        
+        // Store individual step in database
+        await storeIndividualStep(trackingId, stepData, redirectCount);
+        
+        console.log(`✅ [Step ${redirectCount}] Added to chain and stored:`, finalUrl);
         currentUrl = finalUrl;
       } else {
         console.log('🏁 No more redirects found');
@@ -115,9 +145,24 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800) {
 
     } catch (error) {
       console.log('❌ Error during traversal:', error.message);
+      
+      // Store error step
+      const errorStep = {
+        url: currentUrl,
+        timestamp: new Date().toISOString(),
+        status: 'error',
+        redirectNumber: redirectCount + 1,
+        error: error.message,
+        stepId: `error_${redirectCount + 1}_${Date.now()}`
+      };
+      
+      await storeIndividualStep(trackingId, errorStep, redirectCount + 1);
       break;
     }
   }
+
+  // Mark traversal as completed
+  await updateTraversalCompletion(trackingId, redirectChain);
 
   return {
     finalUrl: redirectChain[redirectChain.length - 1].url,
@@ -127,10 +172,51 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800) {
   };
 }
 
+// Store individual step in database
+async function storeIndividualStep(trackingId, stepData, stepNumber) {
+  try {
+    const stepRef = doc(collection(firestore, "visualTraversal", trackingId, "steps"));
+    
+    const stepDocument = {
+      trackingId: trackingId,
+      stepNumber: stepNumber,
+      ...stepData,
+      storedAt: serverTimestamp(),
+      timestamp: new Date().toISOString() // Keep original timestamp
+    };
+
+    await setDoc(stepRef, stepDocument);
+    console.log(`📝 Stored step ${stepNumber} for tracking:`, trackingId);
+    
+  } catch (error) {
+    console.error('❌ Error storing individual step:', error);
+  }
+}
+
+// Update traversal completion status
+async function updateTraversalCompletion(trackingId, redirectChain) {
+  try {
+    const traversalRef = doc(firestore, "visualTraversal", trackingId);
+    
+    await updateDoc(traversalRef, {
+      status: 'completed',
+      completedAt: new Date().toISOString(),
+      finalDestination: redirectChain[redirectChain.length - 1].url,
+      totalSteps: redirectChain.length,
+      updatedAt: serverTimestamp()
+    });
+    
+    console.log('✅ Traversal marked as completed:', trackingId);
+    
+  } catch (error) {
+    console.error('❌ Error updating traversal completion:', error);
+  }
+}
+
 // Store traversal data with proper data validation
 async function storeVisualTraversalData(data) {
   try {
-    const { trackingId, affiliateId, redirectChain, clientInfo, ipAddress } = data;
+    const { trackingId, affiliateId, redirectChain, clientInfo, ipAddress, campaignId, publisherId, source } = data;
     
     const traversalRef = doc(firestore, "visualTraversal", trackingId);
     
@@ -138,6 +224,9 @@ async function storeVisualTraversalData(data) {
     const traversalData = {
       trackingId: trackingId || 'unknown',
       affiliateId: affiliateId || 'unknown',
+      campaignId: campaignId || 'unknown',
+      publisherId: publisherId || 'unknown',
+      source: source || 'unknown',
       ipAddress: ipAddress || 'unknown',
       redirectChain: redirectChain || [],
       totalSteps: redirectChain?.length || 0,
@@ -145,11 +234,12 @@ async function storeVisualTraversalData(data) {
       startedAt: new Date().toISOString(),
       completedAt: null,
       status: 'in_progress',
-      createdAt: serverTimestamp()
+      createdAt: serverTimestamp(),
+      stepStorage: true // Flag to indicate individual step storage
     };
 
     await setDoc(traversalRef, traversalData);
-    console.log('📊 Visual traversal data stored');
+    console.log('📊 Visual traversal data stored with step storage enabled');
     
   } catch (error) {
     console.error('❌ Error storing visual traversal data:', error);
@@ -364,6 +454,15 @@ function generateTraversalPage({
             margin: 15px 0;
             font-size: 13px;
         }
+        .storage-info {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 8px;
+            padding: 8px;
+            margin: 10px 0;
+            font-size: 12px;
+            color: #155724;
+        }
         .loading-dots {
             display: inline-block;
             margin-left: 5px;
@@ -403,6 +502,10 @@ function generateTraversalPage({
         
         <div class="url-display">
             ${currentUrl}
+        </div>
+        
+        <div class="storage-info">
+            ✅ Step ${currentStep + 1} stored in database
         </div>
         
         ${redirectType ? `
@@ -453,7 +556,7 @@ export async function GET(req) {
   const url = new URL(req.url);
   const sp = url.searchParams;
 
-  console.log('👁️ Starting visual redirect process...');
+  console.log('👁️ Starting visual redirect process with step storage...');
 
   try {
     // Extract parameters
@@ -493,14 +596,17 @@ export async function GET(req) {
       const trackingId = `${campaignIdParam}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
       // Start traversal and get first redirect
-      console.log('🚀 Starting URL traversal...');
-      const traversalResult = await traverseWithVisualDelays(targetUrl, 500);
+      console.log('🚀 Starting URL traversal with step storage...');
+      const traversalResult = await traverseWithVisualDelays(targetUrl, 500, trackingId);
       const firstStep = traversalResult.redirectChain[0];
       
       // Store initial data
       await storeVisualTraversalData({
         trackingId,
         affiliateId: affiliateIdParam,
+        campaignId: campaignIdParam,
+        publisherId: publisherIdParam,
+        source: sourceParam,
         redirectChain: traversalResult.redirectChain,
         clientInfo,
         ipAddress: clientIP
@@ -602,7 +708,7 @@ export async function GET(req) {
   }
 }
 
-// Store in main tracking collection (reuse your existing function)
+// Store in main tracking collection
 async function storeMainTrackingData(data) {
   try {
     const { trackingId, affiliateId, campaignId, publisherId, source, previewUrl, finalRedirectUrl, redirectChain, clientInfo, ipAddress } = data;
@@ -622,6 +728,7 @@ async function storeMainTrackingData(data) {
       clickCount: 1,
       status: "redirected",
       visualTraversal: true,
+      stepStorage: true, // Indicate individual steps are stored
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -629,7 +736,7 @@ async function storeMainTrackingData(data) {
     const affiliateLinkRef = doc(firestore, "affiliateLinks", trackingId);
     await setDoc(affiliateLinkRef, trackingData);
     
-    console.log('✅ Main tracking data stored successfully');
+    console.log('✅ Main tracking data stored successfully with step storage');
 
   } catch (error) {
     console.error('❌ Error storing main tracking data:', error);
