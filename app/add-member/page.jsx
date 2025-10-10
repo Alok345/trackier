@@ -49,8 +49,7 @@ try {
 
   // 2️⃣ Generate profileId (first 7 chars of name + random 3-digit number)
   const cleanName = name.replace(/\s+/g, ""); // remove spaces
-  const profileId =
-    cleanName.substring(0, 7).toLowerCase() + Math.floor(100 + Math.random() * 900);
+  const profileId = Math.floor(100 + Math.random() * 900);
 
   // 3️⃣ Create Firestore document
   await setDoc(doc(firestore, "users", uid), {
