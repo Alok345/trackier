@@ -261,7 +261,7 @@ const generateTrackingLink = (campaign) => {
   // Build tracking parameters
   const trackingParams = {
     campaign_id: campaignId,
-    // affiliate_id: affiliateId,
+    affiliate_id: affiliateId,
     ...(publisherId && { pub_id: publisherId }),
     ...(source && { source: source }),
     url: encodeURIComponent(targetUrl),
@@ -281,7 +281,7 @@ const generateTrackingLink = (campaign) => {
     campaignData: {
       campaignId,
       campaignTitle: campaign.title,
-      // affiliateId,
+      affiliateId,
       publisherId,
       advertiserId: advertiserId !== "all" ? advertiserId : null,
       source,
