@@ -1,3 +1,6 @@
+export const dynamic = "force-dynamic";
+
+
 import { firestore } from "@/lib/firestore";
 import {
   doc,
