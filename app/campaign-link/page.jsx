@@ -231,7 +231,6 @@ const ensureSingleEncodedRedirectionUrl = (rawUrl) => {
 };
 
 // Enhanced link generation with visual traversal
-// Enhanced link generation - only creates the tracking link, doesn't fetch URLs
 const generateTrackingLink = (campaign) => {
   const { domainUrl, advertiserId, source } = formData;
   const campaignId = campaign.campaignId;
@@ -244,7 +243,7 @@ const generateTrackingLink = (campaign) => {
   }
 
   // Use the selected domain as the starting point
-  const baseDomain = domainUrl.replace(/\/$/, '');
+  const baseDomain = domainUrl.replace(/\/$/, ''); // Remove trailing slash
   const trackingUrl = new URL(`${baseDomain}/api/visual-redirect`);
 
   // Prepare the target URL (previewUrl from campaign)
@@ -255,7 +254,7 @@ const generateTrackingLink = (campaign) => {
     return null;
   }
 
-  console.log('🔗 Creating tracking link (no URL fetching yet):');
+  console.log('👁️ Generating visual tracking link:');
   console.log('  Starting Domain:', baseDomain);
   console.log('  Target URL:', targetUrl);
 
@@ -265,8 +264,8 @@ const generateTrackingLink = (campaign) => {
     affiliate_id: affiliateId,
     ...(publisherId && { pub_id: publisherId }),
     ...(source && { source: source }),
-    url: encodeURIComponent(targetUrl)
-    // Remove step parameter - let the API handle it
+    url: encodeURIComponent(targetUrl),
+    step: '0' // Start from step 0
   };
 
   // Add all parameters to tracking URL
