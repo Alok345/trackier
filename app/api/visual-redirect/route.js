@@ -1,16 +1,13 @@
 import { firestore } from "@/lib/firestore";
 import {
   doc,
-  getDoc,
   setDoc,
   updateDoc,
-  arrayUnion,
-  serverTimestamp,
   collection,
-  addDoc,
+  serverTimestamp,
 } from "firebase/firestore";
 
-// Enhanced traversal with individual step storage
+// --- Traversal function ---
 async function traverseWithVisualDelays(initialUrl, delayMs = 800, trackingId) {
   let currentUrl = initialUrl;
   const redirectChain = [
@@ -57,7 +54,6 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800, trackingId) {
         contentType = headResponse.headers.get("content-type");
         locationHeader = headResponse.headers.get("location");
 
-        // Collect all headers for storage
         headResponse.headers.forEach((value, key) => {
           headers[key] = value;
         });
@@ -69,7 +65,7 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800, trackingId) {
         console.log("⚠️ HEAD request failed:", headError.message);
       }
 
-      // If no Location header found, try GET request
+      // Try GET request if needed
       if (!locationHeader || !(responseStatus >= 300 && responseStatus < 400)) {
         try {
           const startTime = Date.now();
@@ -87,7 +83,6 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800, trackingId) {
           contentType = getResponse.headers.get("content-type");
           locationHeader = getResponse.headers.get("location");
 
-          // Collect all headers for storage
           getResponse.headers.forEach((value, key) => {
             headers[key] = value;
           });
@@ -104,6 +99,26 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800, trackingId) {
               metaRefreshUrl = extractMetaRefreshUrl(html, currentUrl);
               if (metaRefreshUrl) {
                 finalUrl = metaRefreshUrl;
+              } else if (/window\.location|window\.location\.href/.test(html)) {
+                redirectCount++;
+                const jsStep = {
+                  url: currentUrl,
+                  timestamp: new Date().toISOString(),
+                  status: "redirected",
+                  redirectNumber: redirectCount,
+                  redirectType: "js_redirect_missing",
+                  responseStatus,
+                  contentType,
+                  responseTime,
+                  headers,
+                  previousUrl: currentUrl,
+                  delay: delayMs,
+                  stepId: `step_js_${redirectCount}_${Date.now()}`,
+                };
+                redirectChain.push(jsStep);
+                await storeIndividualStep(trackingId, jsStep, redirectCount);
+                console.log("⚠️ JS-based redirect detected (cannot follow server-side).");
+                break; // stop traversal
               }
             } catch (htmlError) {
               console.log("⚠️ Failed to parse HTML:", htmlError.message);
@@ -115,7 +130,6 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800, trackingId) {
         }
       }
 
-      // Add to redirect chain if we found a new URL
       if (finalUrl !== currentUrl && !visitedUrls.has(finalUrl)) {
         redirectCount++;
         visitedUrls.add(finalUrl);
@@ -130,18 +144,16 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800, trackingId) {
             : metaRefreshUrl
             ? "meta_refresh"
             : "unknown",
-          responseStatus: responseStatus,
-          contentType: contentType,
-          responseTime: responseTime,
-          headers: headers,
+          responseStatus,
+          contentType,
+          responseTime,
+          headers,
           previousUrl: currentUrl,
           delay: delayMs,
           stepId: `step_${redirectCount}_${Date.now()}`,
         };
 
         redirectChain.push(stepData);
-
-        // Store individual step in database
         await storeIndividualStep(trackingId, stepData, redirectCount);
 
         currentUrl = finalUrl;
@@ -152,7 +164,6 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800, trackingId) {
     } catch (error) {
       console.log("❌ Error during traversal:", error.message);
 
-      // Store error step
       const errorStep = {
         url: currentUrl,
         timestamp: new Date().toISOString(),
@@ -167,43 +178,39 @@ async function traverseWithVisualDelays(initialUrl, delayMs = 800, trackingId) {
     }
   }
 
-  // Mark traversal as completed
   await updateTraversalCompletion(trackingId, redirectChain);
 
   return {
     finalUrl: redirectChain[redirectChain.length - 1].url,
-    redirectChain: redirectChain,
+    redirectChain,
     totalRedirects: redirectCount,
     traversalComplete: redirectCount < maxRedirects,
   };
 }
 
-// Store individual step in database
+// --- Store individual step ---
 async function storeIndividualStep(trackingId, stepData, stepNumber) {
   try {
     const stepRef = doc(
       collection(firestore, "visualTraversal", trackingId, "steps")
     );
-
     const stepDocument = {
-      trackingId: trackingId,
-      stepNumber: stepNumber,
+      trackingId,
+      stepNumber,
       ...stepData,
       storedAt: serverTimestamp(),
-      timestamp: new Date().toISOString(), // Keep original timestamp
+      timestamp: new Date().toISOString(),
     };
-
     await setDoc(stepRef, stepDocument);
   } catch (error) {
     console.error("❌ Error storing individual step:", error);
   }
 }
 
-// Update traversal completion status
+// --- Update traversal completion ---
 async function updateTraversalCompletion(trackingId, redirectChain) {
   try {
     const traversalRef = doc(firestore, "visualTraversal", trackingId);
-
     await updateDoc(traversalRef, {
       status: "completed",
       completedAt: new Date().toISOString(),
@@ -216,7 +223,7 @@ async function updateTraversalCompletion(trackingId, redirectChain) {
   }
 }
 
-// Store traversal data with proper data validation
+// --- Store visual traversal ---
 async function storeVisualTraversalData(data) {
   try {
     const {
@@ -232,7 +239,6 @@ async function storeVisualTraversalData(data) {
 
     const traversalRef = doc(firestore, "visualTraversal", trackingId);
 
-    // Ensure all fields have valid values (no undefined)
     const traversalData = {
       trackingId: trackingId || "unknown",
       affiliateId: affiliateId || "unknown",
@@ -247,7 +253,7 @@ async function storeVisualTraversalData(data) {
       completedAt: null,
       status: "in_progress",
       createdAt: serverTimestamp(),
-      stepStorage: true, // Flag to indicate individual step storage
+      stepStorage: true,
     };
 
     await setDoc(traversalRef, traversalData);
@@ -256,11 +262,51 @@ async function storeVisualTraversalData(data) {
   }
 }
 
-// Enhanced IP detection
+// --- Store main tracking ---
+async function storeMainTrackingData(data) {
+  try {
+    const {
+      trackingId,
+      affiliateId,
+      campaignId,
+      publisherId,
+      source,
+      previewUrl,
+      redirectChain,
+      clientInfo,
+      ipAddress,
+    } = data;
+
+    const trackingData = {
+      trackingId,
+      affiliateId,
+      campaignId,
+      publisherId,
+      source,
+      previewUrl,
+      redirectChain,
+      redirectCount: redirectChain?.length ? redirectChain.length - 1 : 0,
+      ipAddress,
+      clientInfo,
+      clickCount: 1,
+      status: "redirected",
+      visualTraversal: true,
+      stepStorage: true,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    const affiliateLinkRef = doc(firestore, "affiliateLinks", trackingId);
+    await setDoc(affiliateLinkRef, trackingData);
+  } catch (error) {
+    console.error("❌ Error storing main tracking data:", error);
+  }
+}
+
+// --- Client info and IP detection ---
 function getClientIP(req) {
   try {
     const headers = req.headers;
-
     const ipHeaders = [
       "x-client-ip",
       "x-forwarded-for",
@@ -280,8 +326,7 @@ function getClientIP(req) {
       const value = headers.get(header);
       if (value) {
         if (header === "x-forwarded-for") {
-          const ips = value.split(",").map((ip) => ip.trim());
-          clientIP = ips[0];
+          clientIP = value.split(",")[0].trim();
           break;
         } else {
           clientIP = value;
@@ -290,11 +335,7 @@ function getClientIP(req) {
       }
     }
 
-    // For local development
-    if (clientIP === "::1" || clientIP === "127.0.0.1") {
-      clientIP = "localhost";
-    }
-
+    if (clientIP === "::1" || clientIP === "127.0.0.1") clientIP = "localhost";
     return clientIP;
   } catch (error) {
     console.warn("⚠️ Error getting client IP:", error);
@@ -302,7 +343,6 @@ function getClientIP(req) {
   }
 }
 
-// Enhanced client information detection
 function getClientInfo(req) {
   const headers = req.headers;
   const clientInfo = {
@@ -320,29 +360,21 @@ function getClientInfo(req) {
     secChUaPlatform: headers.get("sec-ch-ua-platform") || "unknown",
   };
 
-  // Extract browser and OS information from user agent
   const ua = clientInfo.userAgent.toLowerCase();
-
-  // Browser detection
-  if (ua.includes("chrome") && !ua.includes("edg"))
-    clientInfo.browser = "Chrome";
+  if (ua.includes("chrome") && !ua.includes("edg")) clientInfo.browser = "Chrome";
   else if (ua.includes("firefox")) clientInfo.browser = "Firefox";
-  else if (ua.includes("safari") && !ua.includes("chrome"))
-    clientInfo.browser = "Safari";
+  else if (ua.includes("safari") && !ua.includes("chrome")) clientInfo.browser = "Safari";
   else if (ua.includes("edg")) clientInfo.browser = "Edge";
   else if (ua.includes("opera")) clientInfo.browser = "Opera";
   else clientInfo.browser = "Unknown";
 
-  // OS detection
   if (ua.includes("windows")) clientInfo.os = "Windows";
-  else if (ua.includes("macintosh") || ua.includes("mac os"))
-    clientInfo.os = "macOS";
+  else if (ua.includes("macintosh") || ua.includes("mac os")) clientInfo.os = "macOS";
   else if (ua.includes("linux")) clientInfo.os = "Linux";
   else if (ua.includes("android")) clientInfo.os = "Android";
   else if (ua.includes("iphone") || ua.includes("ipad")) clientInfo.os = "iOS";
   else clientInfo.os = "Unknown";
 
-  // Device type
   if (ua.includes("mobile")) clientInfo.deviceType = "Mobile";
   else if (ua.includes("tablet")) clientInfo.deviceType = "Tablet";
   else clientInfo.deviceType = "Desktop";
@@ -350,7 +382,7 @@ function getClientInfo(req) {
   return clientInfo;
 }
 
-// Meta refresh extraction
+// --- Meta refresh extraction ---
 function extractMetaRefreshUrl(html, baseUrl) {
   try {
     const metaRefreshRegex = /<meta[^>]*http-equiv=["']?refresh["']?[^>]*>/gi;
@@ -363,113 +395,47 @@ function extractMetaRefreshUrl(html, baseUrl) {
         );
         if (contentMatch && contentMatch[1]) {
           let url = contentMatch[1].replace(/&amp;/g, "&");
-          try {
-            url = decodeURIComponent(url);
-          } catch (e) {}
+          try { url = decodeURIComponent(url); } catch {}
           return new URL(url, baseUrl).toString();
         }
       }
     }
     return null;
-  } catch (error) {
-    return null;
-  }
+  } catch { return null; }
 }
 
-// Store in main tracking collection
-async function storeMainTrackingData(data) {
-  try {
-    const {
-      trackingId,
-      affiliateId,
-      campaignId,
-      publisherId,
-      source,
-      previewUrl,
-      finalRedirectUrl,
-      redirectChain,
-      clientInfo,
-      ipAddress,
-    } = data;
-
-    const trackingData = {
-      trackingId,
-      affiliateId,
-      campaignId,
-      publisherId,
-      source,
-      previewUrl,
-      // finalRedirectUrl,
-      redirectChain,
-      redirectCount: redirectChain?.length ? redirectChain.length - 1 : 0,
-      ipAddress,
-      clientInfo,
-      clickCount: 1,
-      status: "redirected",
-      visualTraversal: true,
-      stepStorage: true, // Indicate individual steps are stored
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    };
-
-    const affiliateLinkRef = doc(firestore, "affiliateLinks", trackingId);
-    await setDoc(affiliateLinkRef, trackingData);
-  } catch (error) {
-    console.error("❌ Error storing main tracking data:", error);
-  }
-}
-
+// --- GET handler ---
 export async function GET(req) {
   const url = new URL(req.url);
   const sp = url.searchParams;
 
   try {
-    // Extract parameters
     const campaignIdParam = sp.get("campaign_id");
     const affiliateIdParam = sp.get("affiliate_id");
     const publisherIdParam = sp.get("pub_id");
     const sourceParam = sp.get("source");
     const encodedUrl = sp.get("url");
 
-    // Validate required parameters
     if (!affiliateIdParam || !encodedUrl || !campaignIdParam) {
       return new Response(
         JSON.stringify({
-          error:
-            "Missing required parameters: affiliate_id, campaign_id and url are required",
+          error: "Missing required parameters: affiliate_id, campaign_id and url are required",
         }),
         { status: 400 }
       );
     }
 
-    // Decode the target URL
     let targetUrl;
-    try {
-      targetUrl = decodeURIComponent(encodedUrl);
-    } catch (decodeError) {
-      return new Response(JSON.stringify({ error: "Invalid URL encoding" }), {
-        status: 400,
-      });
-    }
+    try { targetUrl = decodeURIComponent(encodedUrl); } 
+    catch { return new Response(JSON.stringify({ error: "Invalid URL encoding" }), { status: 400 }); }
 
-    // Get client info
     const clientIP = getClientIP(req);
     const clientInfo = getClientInfo(req);
 
-    // Generate tracking ID
-    const trackingId = `${campaignIdParam}_${Date.now()}_${Math.random()
-      .toString(36)
-      .substr(2, 9)}`;
+    const trackingId = `${campaignIdParam}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    // Perform complete traversal in backend
+    const traversalResult = await traverseWithVisualDelays(targetUrl, 500, trackingId);
 
-    const traversalResult = await traverseWithVisualDelays(
-      targetUrl,
-      500,
-      trackingId
-    );
-
-    // Store all data
     await storeVisualTraversalData({
       trackingId,
       affiliateId: affiliateIdParam,
@@ -481,55 +447,32 @@ export async function GET(req) {
       ipAddress: clientIP,
     });
 
-    // Store in main tracking collection
     await storeMainTrackingData({
-      trackingId: trackingId,
+      trackingId,
       affiliateId: affiliateIdParam,
       campaignId: campaignIdParam,
       publisherId: publisherIdParam,
       source: sourceParam,
       previewUrl: targetUrl,
-      // finalRedirectUrl: traversalResult.finalUrl,
       redirectChain: traversalResult.redirectChain,
-      clientInfo: clientInfo,
+      clientInfo,
       ipAddress: clientIP,
     });
 
-    // Redirect to final URL without showing any UI
-    // return new Response(null, {
-    //   status: 302,
-    //   headers: {
-    //     'Location': traversalResult.finalUrl,
-    //     'Cache-Control': 'no-cache, no-store, must-revalidate'
-    //   }
-    // });
-
-    // Check if user requested JSON mode
     const mode = sp.get("mode");
 
     if (mode === "json") {
-      // Return full redirect chain as JSON
-      return new Response(
-        JSON.stringify({
-          trackingId,
-          totalRedirects: traversalResult.totalRedirects,
-          redirectChain: traversalResult.redirectChain,
-          finalUrl: traversalResult.finalUrl,
-          traversalComplete: traversalResult.traversalComplete,
-          clientIP,
-          clientInfo,
-        }),
-        {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-          },
-        }
-      );
+      return new Response(JSON.stringify({
+        trackingId,
+        totalRedirects: traversalResult.totalRedirects,
+        redirectChain: traversalResult.redirectChain,
+        finalUrl: traversalResult.finalUrl,
+        traversalComplete: traversalResult.traversalComplete,
+        clientIP,
+        clientInfo,
+      }), { status: 200, headers: { "Content-Type": "application/json", "Cache-Control": "no-cache, no-store, must-revalidate" } });
     }
 
-    // Default behavior — normal redirect
     return new Response(null, {
       status: 302,
       headers: {
@@ -539,12 +482,6 @@ export async function GET(req) {
     });
   } catch (error) {
     console.error("🚨 Error in backend redirect:", error);
-    return new Response(
-      JSON.stringify({
-        error: "Internal server error",
-        message: error.message,
-      }),
-      { status: 500 }
-    );
+    return new Response(JSON.stringify({ error: "Internal server error", message: error.message }), { status: 500 });
   }
 }
